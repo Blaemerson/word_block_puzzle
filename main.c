@@ -22,18 +22,7 @@ typedef struct v2_s { i32 x, y; } v2;
 
 #define SCREEN_WIDTH 1080
 #define SCREEN_HEIGHT 720
-
 #define WORLD_TICK 250
-
-struct {
-    SDL_Window *window;
-    SDL_Texture *texture;
-    SDL_Renderer *renderer;
-    u32 pixels[SCREEN_WIDTH * SCREEN_HEIGHT];
-    bool quit, halt;
-    double time;
-    double tick;
-} state;
 
 #define TILE_SIZE 64
 #define GRID_WIDTH 8
@@ -41,6 +30,18 @@ struct {
 
 #define GRID_END_X ((GRID_WIDTH - 1) * TILE_SIZE)
 #define GRID_END_Y ((GRID_HEIGHT - 1) * TILE_SIZE)
+
+struct {
+    SDL_Window *window;
+    SDL_Texture *texture;
+    SDL_Renderer *renderer;
+    v2 mouse_pos;
+    u32 pixels[SCREEN_WIDTH * SCREEN_HEIGHT];
+    bool quit, halt, paused, begin, gameover;
+    double time;
+    double tick;
+} state;
+
 
 static inline int scr_idx_to_col(int i) {return i % SCREEN_WIDTH;}
 static inline int scr_idx_to_row(int i) {return i / SCREEN_WIDTH;}
@@ -54,10 +55,6 @@ static inline v2 scr_idx_to_pos(int i) {
 
 static inline v2 scr_pos_to_grid(v2 pos) {
     return (v2){.x = pos.x / TILE_SIZE, .y = pos.y / TILE_SIZE};
-}
-
-static inline int scr_to_grid_idx(int i) {
-    return (scr_idx_to_grid_row(i) * GRID_WIDTH) + scr_idx_to_grid_col(i);
 }
 
 static inline int scr_pos_to_grid_idx(v2 pos) {
@@ -135,7 +132,8 @@ static void draw_grid(int x, int y) {
         if ((scr_idx_to_col(i) + x) % TILE_SIZE == 0 || (scr_idx_to_row(i) + y) % TILE_SIZE == 0)
             state.pixels[i] = 0xFFAAAAAA;
         else {
-            ASSERT(grid_idx(i) < GRID_WIDTH * GRID_HEIGHT && scr_to_grid_idx(i) >= 0, "index %d NOT within grid bounds", scr_to_grid_idx(i));
+            int gi = grid_idx(i);
+            ASSERT(gi < GRID_WIDTH * GRID_HEIGHT && gi >= 0, "index %d NOT within grid bounds", gi);
             // draw_tile(grid.tiles[grid_idx(i)]);
             state.pixels[i] = grid.tiles[grid_idx(i)].color;
         }
@@ -305,6 +303,13 @@ int main(int argc, char *argv[]) {
             switch (ev.type) {
                 case SDL_QUIT:
                     state.quit = true;
+                    break;
+                case SDL_MOUSEBUTTONDOWN:
+                    printf("tile letter %c: x=%d y=%d\n", grid.tiles[scr_pos_to_grid_idx(state.mouse_pos)].letter, state.mouse_pos.x, state.mouse_pos.y);
+                    grid.tiles[scr_pos_to_grid_idx(state.mouse_pos)] = (tile_t){};
+                    break;
+                case SDL_MOUSEMOTION:
+                    SDL_GetMouseState(&state.mouse_pos.x, &state.mouse_pos.y);
                     break;
                 case SDL_KEYDOWN:
                     /* Check the SDLKey values and move change the coords */
