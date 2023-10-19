@@ -3,7 +3,7 @@
 #include <stdbool.h>
 #include <SDL2/SDL.h>
 
-#define ASSERT(_e, ...) if (!(_e)) { fprintf(stderr, __VA_ARGS__); exit(1); }
+#define ASSERT(_e, ...) if (!(_e)) { fprintf(stderr, "%s %d: ", __FILE__, __LINE__); fprintf(stderr, __VA_ARGS__);  exit(1); }
 
 typedef float f32;
 typedef double f64;
@@ -18,7 +18,7 @@ typedef int64_t i64;
 typedef size_t usize;
 typedef ssize_t isize;
 
-typedef struct v2_s { i32 x, y; } v2;
+typedef struct vec2_s { i32 x, y; } vec2;
 
 #define SCREEN_WIDTH 1080
 #define SCREEN_HEIGHT 720
@@ -27,15 +27,20 @@ typedef struct v2_s { i32 x, y; } v2;
 #define TILE_SIZE 64
 #define GRID_WIDTH 8
 #define GRID_HEIGHT 10
+#define GRID_MAX (GRID_WIDTH * GRID_HEIGHT)
 
 #define GRID_END_X ((GRID_WIDTH - 1) * TILE_SIZE)
 #define GRID_END_Y ((GRID_HEIGHT - 1) * TILE_SIZE)
+
+#define CLEAR 0x00000000
+#define RED 0xFF0000FF
+#define BLUE 0xFFFF0000
 
 struct {
     SDL_Window *window;
     SDL_Texture *texture;
     SDL_Renderer *renderer;
-    v2 mouse_pos;
+    vec2 mouse_pos;
     u32 pixels[SCREEN_WIDTH * SCREEN_HEIGHT];
     bool quit, halt, paused, begin, gameover;
     double time;
@@ -43,57 +48,50 @@ struct {
 } state;
 
 
-static inline int scr_idx_to_col(int i) {return i % SCREEN_WIDTH;}
-static inline int scr_idx_to_row(int i) {return i / SCREEN_WIDTH;}
+static inline int pix_to_x_pos(int i) {return i % SCREEN_WIDTH;}
+static inline int pix_to_y_pos(int i) {return i / SCREEN_WIDTH;}
 
-static inline int scr_idx_to_grid_row(int i) {return (scr_idx_to_row(i) / TILE_SIZE);}
-static inline int scr_idx_to_grid_col(int i) {return (scr_idx_to_col(i) / TILE_SIZE);}
+static inline vec2 grid_pos_to_pix_pos(vec2 pos) { return (vec2){pos.x * TILE_SIZE, pos.y * TILE_SIZE}; }
 
-static inline v2 scr_idx_to_pos(int i) {
-    return (v2){.x = scr_idx_to_col(i), .y = scr_idx_to_row(i)};
+static inline vec2 pix_index_to_pix_pos(int i) {
+    return (vec2){.x = pix_to_x_pos(i), .y = pix_to_y_pos(i)};
 }
 
-static inline v2 scr_pos_to_grid(v2 pos) {
-    return (v2){.x = pos.x / TILE_SIZE, .y = pos.y / TILE_SIZE};
+static inline vec2 pix_pos_to_grid_pos(vec2 pos) {
+    return (vec2){.x = pos.x / TILE_SIZE, .y = pos.y / TILE_SIZE};
 }
 
-static inline int scr_pos_to_grid_idx(v2 pos) {
-    v2 grid_pos = (v2){.x = pos.x / TILE_SIZE, .y = pos.y / TILE_SIZE};
+static inline int pix_pos_to_grid_index(vec2 pos) {
+    vec2 grid_pos = (vec2){.x = pos.x / TILE_SIZE, .y = pos.y / TILE_SIZE};
     return (grid_pos.y * GRID_WIDTH) + grid_pos.x;
 }
 
-static inline u32 grid_pos_to_idx(v2 pos) {
+static inline u32 grid_pos_to_grid_index(vec2 pos) {
     return (pos.y * GRID_WIDTH) + pos.x;
 }
 
-static inline u32 scr_idx_to_grid_idx(int i) {
-    v2 scr_pos = scr_idx_to_pos(i);
-    v2 grid_pos = scr_pos_to_grid(scr_pos);
-    return grid_pos_to_idx(grid_pos);
+static inline u32 pix_index_to_grid_index(int i) {
+    vec2 scr_pos = pix_index_to_pix_pos(i);
+    vec2 grid_pos = pix_pos_to_grid_pos(scr_pos);
+    return grid_pos_to_grid_index(grid_pos);
 }
 
 
-static inline int scr_pos_to_idx(v2 pos) {
+static inline u32 pix_pos_to_pix_index(vec2 pos) {
     return pos.x + SCREEN_WIDTH * pos.y;
 }
-
-#define grid_idx(i) scr_idx_to_grid_idx(i)
-#define scr_idx(pos) scr_pos_to_idx(pos)
 
 typedef struct tile {
     u8 letter;
     bool filled;
     u32 color;
-    v2 pos;
+    vec2 pos;
 } tile_t;
 
 struct {
     tile_t tiles[GRID_WIDTH * GRID_HEIGHT];
 } grid;
 
-struct {
-    struct {tile_t pieces[GRID_WIDTH * GRID_HEIGHT]; usize n; } pieces;
-} pieces;
 
 static void debug_print_grid() {
     for (int i = 0; i < GRID_WIDTH * GRID_HEIGHT; i++) {
@@ -104,18 +102,32 @@ static void debug_print_grid() {
 }
 static void clear_grid() {
     for (int i = 0; i < GRID_WIDTH * GRID_HEIGHT; i++)
-        grid.tiles[i] = (tile_t){.letter='\0', .filled=false, .color=0x00000000};
+        grid.tiles[i] = (tile_t){.letter='\0', .filled=false, .color=CLEAR};
 }
 
-static v2 vector_add(v2 v0, v2 v1) {
-    return (v2){v0.x + v1.x, v0.y + v1.y};
+static vec2 vec2_create(int x, int y) {
+    return (vec2){x, y};
+}
+
+static inline vec2 vector_add(vec2 v0, vec2 v1) {
+    return (vec2){v0.x + v1.x, v0.y + v1.y};
+}
+
+static inline vec2 vector_add_to_all(vec2 v0, int c) {
+    return (vec2){v0.x + c, v0.y + c};
+}
+
+static inline vec2 vector_multiply(vec2 v, int s) {
+    return (vec2){v.x * s, v.y * s};
 }
 
 static void draw_tile(tile_t t) {
     int border = 2;
-    for (int x = t.pos.x + (1.5*border); x < t.pos.x + TILE_SIZE - border; x++) {
-        for (int y = t.pos.y + (1.5*border); y < t.pos.y + TILE_SIZE - border; y++) {
-            state.pixels[scr_idx(((v2){x, y}))] = t.color;
+    vec2 real_start = grid_pos_to_pix_pos(t.pos);
+    vec2 real_end = vector_add_to_all(real_start, TILE_SIZE);
+    for (int x = real_start.x + (1.5*border); x < real_end.x - border; x++) {
+        for (int y = real_start.y + (1.5*border); y < real_end.y - border; y++) {
+            state.pixels[pix_pos_to_pix_index(((vec2){x, y}))] = t.color;
         }
     }
 }
@@ -123,19 +135,19 @@ static void draw_tile(tile_t t) {
 static void draw_grid(int x, int y) {
     for (int i = x * y; i < SCREEN_WIDTH * SCREEN_HEIGHT; i++) {
 
-        if (scr_idx_to_col(i) < x || scr_idx_to_col(i) > (TILE_SIZE * GRID_WIDTH) + x)
+        vec2 scr_pos = pix_index_to_pix_pos(i);
+        if (scr_pos.x < x || scr_pos.x > (TILE_SIZE * GRID_WIDTH) + x)
             continue;
 
-        if (scr_idx_to_row(i) < y || scr_idx_to_row(i) > (TILE_SIZE * GRID_HEIGHT) + y)
+        if (scr_pos.y < y || scr_pos.y > (TILE_SIZE * GRID_HEIGHT) + y)
             continue;
 
-        if ((scr_idx_to_col(i) + x) % TILE_SIZE == 0 || (scr_idx_to_row(i) + y) % TILE_SIZE == 0)
+        if ((scr_pos.x + x) % TILE_SIZE == 0 || (scr_pos.y + y) % TILE_SIZE == 0)
             state.pixels[i] = 0xFFAAAAAA;
         else {
-            int gi = grid_idx(i);
-            ASSERT(gi < GRID_WIDTH * GRID_HEIGHT && gi >= 0, "index %d NOT within grid bounds", gi);
-            // draw_tile(grid.tiles[grid_idx(i)]);
-            state.pixels[i] = grid.tiles[grid_idx(i)].color;
+            int gi = pix_index_to_grid_index(i);
+            ASSERT(gi < GRID_MAX && gi >= 0, "index %d NOT within grid bounds", gi);
+            state.pixels[i] = grid.tiles[gi].color;
         }
     }
 }
@@ -160,18 +172,17 @@ static void flip_player() {
     player.t2.letter = t1.letter;
 }
 
-
 static void draw_player() {
     draw_tile(player.t1);
     draw_tile(player.t2);
 }
 
 static void set_player() {
-    grid.tiles[scr_pos_to_grid_idx(player.t1.pos)] = player.t1;
-    grid.tiles[scr_pos_to_grid_idx(player.t2.pos)] = player.t2;
+    grid.tiles[grid_pos_to_grid_index(player.t1.pos)] = player.t1;
+    grid.tiles[grid_pos_to_grid_index(player.t2.pos)] = player.t2;
 }
 
-static tile_t new_tile(bool filled, u32 color, char letter, v2 pos) {
+static tile_t new_tile(bool filled, u32 color, char letter, vec2 pos) {
     return (tile_t){.filled=filled, .color=color, .letter=letter, .pos=pos};
 }
 
@@ -180,22 +191,22 @@ static void render() {
     draw_player();
 }
 
-static bool inline check_player_in_grid(v2 move) {
-    return (player.t1.pos.x + move.x <= GRID_END_X &&
-            player.t2.pos.x + move.x <= GRID_END_X &&
+static bool inline check_player_in_grid(vec2 move) {
+    return (player.t1.pos.x + move.x < GRID_WIDTH &&
+            player.t2.pos.x + move.x < GRID_WIDTH &&
             player.t1.pos.x + move.x >= 0 &&
             player.t2.pos.x + move.x >= 0 &&
-            player.t1.pos.y + move.y <= GRID_END_Y &&
-            player.t2.pos.y + move.y <= GRID_END_Y &&
+            player.t1.pos.y + move.y < GRID_HEIGHT &&
+            player.t2.pos.y + move.y < GRID_HEIGHT &&
             player.t1.pos.y + move.y >= 0 &&
             player.t2.pos.y + move.y >= 0);
 }
 
 
-static bool inline check_player_collision(v2 move_vec) {
+static bool inline check_player_collision(vec2 move_vec) {
     bool safe = true;
-    int t1_dest_idx = scr_pos_to_grid_idx(vector_add(player.t1.pos, move_vec));
-    int t2_dest_idx = scr_pos_to_grid_idx(vector_add(player.t2.pos, move_vec));
+    int t1_dest_idx = grid_pos_to_grid_index(vector_add(player.t1.pos, move_vec));
+    int t2_dest_idx = grid_pos_to_grid_index(vector_add(player.t2.pos, move_vec));
 
     if (grid.tiles[t1_dest_idx].filled || grid.tiles[t2_dest_idx].filled)
         safe = false;
@@ -203,44 +214,76 @@ static bool inline check_player_collision(v2 move_vec) {
     return safe;
 }
 
-static bool inline check_tile_move(tile_t t, v2 move) {
-    int g_idx = scr_pos_to_grid_idx(vector_add(t.pos, move));
+static bool inline check_tile_move(tile_t t, vec2 move) {
+    int g_idx = grid_pos_to_grid_index(vector_add(t.pos, move));
     if (t.filled && grid.tiles[g_idx].filled == false) {
         return true;
     }
     return false;
 }
 
-static void move_player(v2 move) {
+static void move_player(vec2 move) {
     player.t1.pos.x += move.x;
     player.t1.pos.y += move.y;
     player.t2.pos.x += move.x;
     player.t2.pos.y += move.y;
 }
 
-static void move_tile(tile_t t, v2 move) {
-    grid.tiles[scr_pos_to_grid_idx(t.pos)] = (tile_t){.color=0, .filled=false, .letter='\0', .pos={}};
+static void move_tile(tile_t t, vec2 move) {
+    grid.tiles[grid_pos_to_grid_index(t.pos)] = (tile_t){};
     t.pos.x += move.x;
     t.pos.y += move.y;
-    grid.tiles[scr_pos_to_grid_idx(t.pos)] = t;
+    grid.tiles[grid_pos_to_grid_index(t.pos)] = t;
 }
 
-#include <time.h>
-
 static void spawn_player() {
-    // todo: make random
     char t1_letter = 65 + (rand() % 26);
     char t2_letter = 65 + (rand() % 26);
-    v2 t1_pos = (v2){0, 0};
-    v2 t2_pos = (v2){TILE_SIZE, 0};
+    vec2 t1_pos = (vec2){3, 0};
+    vec2 t2_pos = (vec2){4, 0};
 
-    player.t1 = new_tile(true, 0xFF0000FF, t1_letter, t1_pos);
-    player.t2 = new_tile(true, 0xFFFF0000, t2_letter, t2_pos);
+    player.t1 = new_tile(true, RED, t1_letter, t1_pos);
+    player.t2 = new_tile(true, BLUE, t2_letter, t2_pos);
 }
 
 static void clear_player() {
     player.t1 = (tile_t){};
     player.t2 = (tile_t){};
+}
+
+static void update_physics() {
+    if (state.halt) {
+        if (SDL_GetTicks() >= state.time + WORLD_TICK) {
+            state.time = SDL_GetTicks();
+            vec2 fall = (vec2){0, 1};
+            bool none_falling = true;
+            for (int i = ((GRID_WIDTH * GRID_HEIGHT) - GRID_WIDTH) - 1; i > -1; i--) {
+                if (check_tile_move(grid.tiles[i], fall)) {
+                    none_falling = false;
+                    move_tile(grid.tiles[i], fall);
+                }
+            }
+            if (none_falling) {
+                state.halt = false;
+                spawn_player();
+            }
+        }
+
+    } else {
+
+        if (SDL_GetTicks() >= state.time + state.tick) {
+            state.time = SDL_GetTicks();
+            vec2 fall = (vec2){0, 1};
+            if (check_player_in_grid(fall) && check_player_collision(fall)) {
+                move_player(fall);
+            } else {
+                set_player();
+                state.halt = true;
+                clear_player();
+            }
+        }
+
+    }
 }
 
 int main(int argc, char *argv[]) {
@@ -264,40 +307,7 @@ int main(int argc, char *argv[]) {
     while (!state.quit) {
         SDL_Event ev;
 
-        if (state.halt) {
-
-            if (SDL_GetTicks() >= state.time + WORLD_TICK) {
-                state.time = SDL_GetTicks();
-                v2 fall = (v2){0, TILE_SIZE};
-                bool none_falling = true;
-                for (int i = ((GRID_WIDTH * GRID_HEIGHT) - GRID_WIDTH) - 1; i > -1; i--) {
-                    if (check_tile_move(grid.tiles[i], fall)) {
-                        none_falling = false;
-                        move_tile(grid.tiles[i], fall);
-                    }
-                }
-                if (none_falling) {
-                    state.halt = false;
-                    spawn_player();
-                }
-            }
-
-        } else {
-
-            if (SDL_GetTicks() >= state.time + state.tick) {
-                state.time = SDL_GetTicks();
-                v2 fall = (v2){0, TILE_SIZE};
-                if (check_player_in_grid(fall) && check_player_collision(fall)) {
-                    move_player(fall);
-                } else {
-                    set_player();
-                    state.halt = true;
-                    clear_player();
-                }
-            }
-
-        }
-
+        update_physics();
 
         while (SDL_PollEvent(&ev)) {
             switch (ev.type) {
@@ -305,8 +315,8 @@ int main(int argc, char *argv[]) {
                     state.quit = true;
                     break;
                 case SDL_MOUSEBUTTONDOWN:
-                    printf("tile letter %c: x=%d y=%d\n", grid.tiles[scr_pos_to_grid_idx(state.mouse_pos)].letter, state.mouse_pos.x, state.mouse_pos.y);
-                    grid.tiles[scr_pos_to_grid_idx(state.mouse_pos)] = (tile_t){};
+                    printf("tile letter %c: x=%d y=%d\n", grid.tiles[pix_pos_to_grid_index(state.mouse_pos)].letter, state.mouse_pos.x, state.mouse_pos.y);
+                    grid.tiles[pix_pos_to_grid_index(state.mouse_pos)] = (tile_t){};
                     break;
                 case SDL_MOUSEMOTION:
                     SDL_GetMouseState(&state.mouse_pos.x, &state.mouse_pos.y);
@@ -318,13 +328,13 @@ int main(int argc, char *argv[]) {
                             state.quit = true;
                         }
                         case SDLK_LEFT: {
-                            v2 move = (v2){-TILE_SIZE, 0};
+                            vec2 move = (vec2){-1, 0};
                             if (check_player_in_grid(move) && check_player_collision(move))
                                 move_player(move);
                             break;
                         }
                         case SDLK_RIGHT: {
-                            v2 move = (v2){TILE_SIZE, 0};
+                            vec2 move = (vec2){1, 0};
                             if (check_player_in_grid(move) && check_player_collision(move))
                                 move_player(move);
                             break;
@@ -333,7 +343,7 @@ int main(int argc, char *argv[]) {
                             flip_player();
                             break;
                         case SDLK_DOWN: {
-                            v2 move = (v2){0, TILE_SIZE};
+                            vec2 move = (vec2){0, 1};
                             if (check_player_in_grid(move) && check_player_collision(move)) {
                                 state.time = SDL_GetTicks();
                                 move_player(move);
@@ -367,7 +377,6 @@ int main(int argc, char *argv[]) {
     }
 
     SDL_DestroyTexture(state.texture);
-
 
     return 0;
 }
