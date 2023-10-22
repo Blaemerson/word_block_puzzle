@@ -5,6 +5,7 @@
 #include "../include/types.h"
 #include "../include/vec.h"
 #include "../include/sprite.h"
+#include <time.h>
 
 #define ASSERT(_e, ...) if (!(_e)) { fprintf(stderr, "[ERROR] %s %d: ", __FILE__, __LINE__); fprintf(stderr, __VA_ARGS__);  exit(1); }
 #define LOG(...) do { fprintf(stderr, "[LOG] %s %d: ", __FILE__, __LINE__); fprintf(stderr, __VA_ARGS__); printf("\n"); } while (0)
@@ -290,6 +291,14 @@ const char* letter_textures[] = {
     "gfx/TileZ.png",
 };
 
+sprite sprites[26];
+
+static void load_sprites() {
+    for (int i = 0; i < 26; i++) {
+        sprites[i] = sprite_create_from(64, 64, load_img_pixels(letter_textures[i]));
+    }
+}
+
 static void queue_next() {
     vec2i t1_pos = (vec2i){(GRID_WIDTH / 2) - 1, 0};
     vec2i t2_pos = (vec2i){(GRID_WIDTH / 2), 0};
@@ -301,29 +310,11 @@ static void queue_next() {
     queue.tiles[0] = new_tile(true, 0xFFFFFFFF, t1_letter, t1_pos);
     queue.tiles[1] = new_tile(true, 0xAAAAAAFF, t2_letter, t2_pos);
 
-    sprite sp1 = sprite_create_from(64, 64, load_img_pixels(letter_textures[(t1_letter) - 'A']));
-    sprite sp2 = sprite_create_from(64, 64, load_img_pixels(letter_textures[(t2_letter) - 'A']));
-
-    queue.tiles[0].sprite = sp1;
-    queue.tiles[1].sprite = sp2;
+    queue.tiles[0].sprite = sprites[t1_letter - 'A'];
+    queue.tiles[1].sprite = sprites[t2_letter - 'A'];
 }
 
 static void spawn_player() {
-    // vec2i t1_pos = (vec2i){(GRID_WIDTH / 2) - 1, 0};
-    // vec2i t2_pos = (vec2i){(GRID_WIDTH / 2), 0};
-    //
-    // char t1_letter = gen_random_letter();
-    // char t2_letter = gen_random_letter();
-    // LOG("spawn_player: t1.letter=%c t2.letter=%c",t1_letter, t2_letter);
-    //
-    // player.t1 = new_tile(true, 0xFFFFFFFF, t1_letter, t1_pos);
-    // player.t2 = new_tile(true, 0xAAAAAAFF, t2_letter, t2_pos);
-    //
-    // sprite sp1 = sprite_create_from(64, 64, load_img_pixels(letter_textures[(t1_letter) - 'A']));
-    // sprite sp2 = sprite_create_from(64, 64, load_img_pixels(letter_textures[(t2_letter) - 'A']));
-    //
-    // player.t1.sprite = sp1;
-    // player.t2.sprite = sp2;
     player.t1 = queue.tiles[0];
     player.t2 = queue.tiles[1];
 
@@ -474,7 +465,10 @@ int main(int argc, char *argv[]) {
 
     SDL_SetRenderDrawBlendMode(state.renderer, SDL_BLENDMODE_MUL);
 
+    srand(time(NULL));
+
     clear_grid();
+    load_sprites();
     queue_next();
     spawn_player();
     queue_next();
