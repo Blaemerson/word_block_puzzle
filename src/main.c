@@ -6,12 +6,7 @@
 #include "../include/vec.h"
 #include "../include/sprite.h"
 #include <time.h>
-
-#define ASSERT(_e, ...) if (!(_e)) { fprintf(stderr, "[ERROR] %s %d: ", __FILE__, __LINE__); fprintf(stderr, __VA_ARGS__);  exit(1); }
-#define LOG(...) do { fprintf(stderr, "[LOG] %s %d: ", __FILE__, __LINE__); fprintf(stderr, __VA_ARGS__); printf("\n"); } while (0)
-
-#define SCREEN_WIDTH 1080
-#define SCREEN_HEIGHT 720
+#include "../include/macros.h"
 
 struct {
     SDL_Window *window;
@@ -24,14 +19,21 @@ struct {
     double tick;
 } state;
 
+typedef struct obj_s {
+    vec2i pos;
+    sprite *sprite;
+    vec2i size;
+} obj_t;
+
 typedef struct tile {
     u8 letter;
-    sprite *sprite;
     bool filled;
     bool marked;
-    u32 size;
     vec2i pos;
+
+    obj_t obj;
 } tile_t;
+
 
 struct {
     bool active;
@@ -45,35 +47,37 @@ struct {
 #define GAMEBOARD_OFFSET_X (SCREEN_WIDTH / 2) - ((GAMEBOARD_WIDTH * TILE_SIZE) / 2)
 
 struct {
-    vec2i offset;
-
-    uint h, w;
-    sprite *sprite;
+    uint height, width;
     tile_t tiles[GAMEBOARD_MAX];
+
+    obj_t obj;
 } grid;
 
 struct {
-    vec2i offset;
-    sprite *sprite;
     tile_t tiles[2];
+
+    obj_t obj;
 } queue;
 
-static void write_pixel_block(int x, int y, int w, int h, u32 *pixels) {
-    SDL_UpdateTexture(state.texture, &(SDL_Rect){.x=x, .y=y, .w=w, .h=h}, pixels, w * 4);
+static void write_pixel_block(int x, int y, sprite *s) {
+    SDL_UpdateTexture(state.texture, &(SDL_Rect){.x=x, .y=y, .w=s->width, .h=s->height}, s->pixels, s->width * 4);
 }
 
-static void draw_queue() {
-    u32 x = queue.offset.x;
-    u32 y = queue.offset.y;
-    u32 size = queue.tiles[0].size;
-    write_pixel_block(x, y, size, size, queue.tiles[0].sprite->pixels);
-    write_pixel_block(x + size, y, size, size, queue.tiles[1].sprite->pixels);
+static void queue_render() {
+    u32 x = queue.obj.pos.x;
+    u32 y = queue.obj.pos.y;
+
+
+    write_pixel_block(x, y, queue.obj.sprite);
+
+    write_pixel_block(x + 32, y + 32, queue.tiles[0].obj.sprite);
+    write_pixel_block(x + 64 + 32, y + 32, queue.tiles[1].obj.sprite);
 }
 
 
 static int pix_pos_to_grid_index(vec2i world_pos) {
-    vec2i grid_pos = {.x = ((world_pos.x - grid.offset.x) / TILE_SIZE), .y = (world_pos.y - grid.offset.y) / TILE_SIZE};
-    return (grid_pos.y * grid.w) + grid_pos.x;
+    vec2i grid_pos = {.x = ((world_pos.x - grid.obj.pos.x) / TILE_SIZE), .y = (world_pos.y - grid.obj.pos.y) / TILE_SIZE};
+    return (grid_pos.y * grid.width) + grid_pos.x;
 }
 
 static void grid_debug_print() {
@@ -84,8 +88,12 @@ static void grid_debug_print() {
     }
 }
 
-static void clear_grid() {
-    for (int i = 0; i < grid.w * grid.h; i++)
+static u32 at(uint x, uint y, u32 width) {
+    return (x * width) + y;
+}
+
+static void grid_clear() {
+    for (int i = 0; i < grid.width * grid.height; i++)
         grid.tiles[i] = (tile_t){};
 }
 
@@ -103,21 +111,12 @@ static void clear_scr() {
 
 static void verline(int x, int y0, int y1, u32 color) {
     for (int y = y0; y <= y1; y++)
-        state.pixels[(y * SCREEN_WIDTH) + x] = color;
+        state.pixels[at(y, x, SCREEN_WIDTH)] = color;
 }
-
 
 static void horiline(int x0, int x1, int y, u32 color) {
     for (int x = x0; x <= x1; x++)
-        state.pixels[(y * SCREEN_WIDTH) + x] = color;
-}
-static void draw_rect(vec2i pos, uint w, uint h, u32 color, uint border_thickness) {
-    for (int i = border_thickness; i < w - (border_thickness - 1); i++)
-        verline(pos.x + i, pos.y + border_thickness, pos.y + h - border_thickness, color);
-}
-
-static void draw_square(vec2i pos, uint size, u32 color, uint border_thickness) {
-    draw_rect(pos, size, size, color, border_thickness);
+        state.pixels[at(y, x, SCREEN_WIDTH)] = color;
 }
 
 static u32 * clone_pixels(u32 const * src, size_t len) {
@@ -127,15 +126,20 @@ static u32 * clone_pixels(u32 const * src, size_t len) {
 }
 
 static void draw_tile(tile_t t) {
-    u32 x = t.pos.x * t.size + grid.offset.x;
-    u32 y = t.pos.y * t.size + grid.offset.y;
-    u32 *pixels = clone_pixels(t.sprite->pixels, t.sprite->width * t.sprite->height);
+    u32 x = t.pos.x * t.obj.size.x + grid.obj.pos.x;
+    u32 y = t.pos.y * t.obj.size.y + grid.obj.pos.y;
     if (t.marked) {
-        for (int i = 0; i < t.sprite->width * t.sprite->height; i++) {
+        u32 *pixels = clone_pixels(t.obj.sprite->pixels, t.obj.sprite->width * t.obj.sprite->height);
+
+        for (int i = 0; i < t.obj.sprite->width * t.obj.sprite->height; i++) {
             pixels[i] |= 0xFF1122FF;
         }
+
+        sprite s = sprite_create_from(t.obj.size.x, t.obj.size.y, pixels);
+        write_pixel_block(x, y, &s);
+    } else {
+        write_pixel_block(x, y, t.obj.sprite);
     }
-    write_pixel_block(x, y, t.size, t.size, pixels);
 }
 
 static void draw_tiles() {
@@ -155,11 +159,12 @@ static void draw_bg() {
 static void draw_grid() {
     u32 line_color = 0xBBBBBBBB;
 
-    for (int i = 0; i < (grid.w * TILE_SIZE) + 1; i += TILE_SIZE) {
-        verline(i + grid.offset.x, grid.offset.y, grid.h * TILE_SIZE + grid.offset.y, line_color);
+    for (int i = 0; i < (grid.width * TILE_SIZE) + 1; i += TILE_SIZE) {
+        verline(i + grid.obj.pos.x, grid.obj.pos.y, grid.height * TILE_SIZE + grid.obj.pos.y, line_color);
     }
-    for (int i = grid.offset.y; i < (grid.h * TILE_SIZE) + 1 + grid.offset.y; i += TILE_SIZE) {
-        horiline(grid.offset.x, (grid.w * TILE_SIZE) + grid.offset.x, i, line_color);
+
+    for (int i = grid.obj.pos.y; i < (grid.height * TILE_SIZE) + 1 + grid.obj.pos.y; i += TILE_SIZE) {
+        horiline(grid.obj.pos.x, (grid.width * TILE_SIZE) + grid.obj.pos.x, i, line_color);
     }
 }
 
@@ -169,11 +174,11 @@ static void flip_player() {
     tile_t t1 = player.t1;
     player.t1.filled = player.t2.filled;
     player.t1.letter = player.t2.letter;
-    player.t1.sprite = player.t2.sprite;
+    player.t1.obj.sprite = player.t2.obj.sprite;
 
     player.t2.filled = t1.filled;
     player.t2.letter = t1.letter;
-    player.t2.sprite = t1.sprite;
+    player.t2.obj.sprite = t1.obj.sprite;
 
 }
 
@@ -185,21 +190,32 @@ static void draw_player() {
 static void set_player() {
     grid.tiles[(player.t1.pos.y * GAMEBOARD_WIDTH) + player.t1.pos.x] = player.t1;
     grid.tiles[(player.t2.pos.y * GAMEBOARD_WIDTH) + player.t2.pos.x] = player.t2;
+    LOG( "Set tiles at (%d, %d) and (%d, %d) : (%c %c)",
+        player.t1.pos.x,
+        player.t1.pos.y,
+        player.t2.pos.x,
+        player.t2.pos.y,
+        player.t1.letter,
+        player.t2.letter);
 }
 
-static tile_t new_tile(bool filled, char letter, vec2i pos) {
-    return (tile_t){.filled=filled, .letter=letter, .pos=pos, .size=64};
-}
+
+
+// static tile_t new_tile(bool filled, char letter, vec2i pos) {
+//     return (tile_t){.filled=filled, .letter=letter, .pos=pos, .size=64};
+// }
 
 static void render() {
-    // clear_scr();
+    clear_scr();
     draw_bg();
     draw_grid();
 
     SDL_UpdateTexture(state.texture, NULL, state.pixels, SCREEN_WIDTH * 4);
 
     draw_tiles();
-    draw_queue();
+
+    queue_render();
+
     if (player.active) draw_player();
 
     SDL_RenderCopyEx(state.renderer, state.texture, NULL, NULL, 0.0, NULL, SDL_FLIP_NONE);
@@ -208,9 +224,9 @@ static void render() {
 
 static bool check_tile_in_grid(tile_t t, vec2i move) {
     vec2i dest = vector_add(t.pos, move);
-    return (dest.x < grid.w &&
+    return (dest.x < grid.width &&
             dest.x >= 0 &&
-            dest.y < grid.h &&
+            dest.y < grid.height &&
             dest.y >= 0);
 }
 
@@ -220,7 +236,7 @@ static bool check_player_in_grid(vec2i move) {
 
 static bool check_tile_move(tile_t t, vec2i move) {
 
-    int g_idx = ((t.pos.y + move.y) * grid.w) + (t.pos.x + move.x);
+    int g_idx = ((t.pos.y + move.y) * grid.width) + (t.pos.x + move.x);
     if (t.filled && !(grid.tiles[g_idx].filled)) {
         return true;
     }
@@ -234,14 +250,14 @@ static bool check_player_move(vec2i move) {
 static void move_tile(tile_t *t, vec2i move) {
     ASSERT(check_tile_move(*t, move), "couldn't move tile");
 
-    int old_idx = (t->pos.y * grid.w) + t->pos.x;
+    int old_idx = (t->pos.y * grid.width) + t->pos.x;
     t->pos = vector_add(t->pos, move);
-    grid.tiles[(t->pos.y * grid.w) + t->pos.x] = *t;
+    grid.tiles[(t->pos.y * grid.width) + t->pos.x] = *t;
     grid.tiles[old_idx] = (tile_t){};
 }
 
 static void move_player(vec2i move) {
-    LOG("move_player: t1.pos=(%d,%d), t2.pos=(%d,%d)", player.t1.pos.x, player.t1.pos.y, player.t2.pos.x, player.t2.pos.y);
+    // LOG("move_player: t1.pos=(%d,%d), t2.pos=(%d,%d)", player.t1.pos.x, player.t1.pos.y, player.t2.pos.x, player.t2.pos.y);
     player.t1.pos = vector_add(player.t1.pos, move);
     player.t2.pos = vector_add(player.t2.pos, move);
 }
@@ -253,22 +269,31 @@ static void clear_player() {
 }
 
 static void grid_scan_hori() {
-    for (int i = 1; i < grid.w * grid.h; i++) {
+    for (int i = 1; i < grid.width * grid.height; i++) {
     }
 }
 
-static void grid_clear_marked() {
-    for (int i = 0; i < grid.w * grid.h; i++) {
+// returns true if any tiles were cleared - that way we know to check for falling tiles
+static bool grid_clear_marked() {
+    bool cleared = false;
+    for (int i = 0; i < grid.width * grid.height; i++) {
         if (grid.tiles[i].marked) {
+            cleared = true;
             grid.tiles[i] = (tile_t){};
         }
     }
+
+    return cleared;
 }
 
-static void grid_scan() {
+static bool grid_scan() {
+    bool cleared = false;
+    LOG("Scanning...");
     state.halt = true;
     grid_scan_hori();
-    grid_clear_marked();
+    cleared = grid_clear_marked();
+
+    return cleared;
 }
 
 u32 *load_img_pixels(const char *file)
@@ -276,6 +301,7 @@ u32 *load_img_pixels(const char *file)
     SDL_Surface *surface = IMG_Load(file);
     u32 *pixels;
     if (surface) {
+        LOG("Loading %s", file);
         pixels = surface->pixels;
         SDL_FreeSurface(surface);
     }
@@ -316,32 +342,47 @@ static const char* letter_textures[] = {
     "gfx/TileZ.png",
 };
 
-static sprite sprites[26];
+static sprite sprites[27];
 
 static void load_sprites() {
     for (int i = 0; i < 26; i++) {
         sprites[i] = sprite_create_from(64, 64, load_img_pixels(letter_textures[i]));
     }
+    LOG("Create sprite");
+    sprites[26] = sprite_create_from(64 * 3, 64 * 2, load_img_pixels("gfx/QueueBorder.png"));
 }
 
-static void queue_next() {
-    vec2i t1_pos = (vec2i){(grid.w / 2) - 1, 0};
-    vec2i t2_pos = (vec2i){(grid.w / 2), 0};
+static tile_t *tile_create(u8 letter, bool filled, bool marked, uint x, uint y, uint h, uint w) {
+    tile_t *t = &(tile_t){
+        .letter = letter,
+        .filled = filled,
+        .marked = marked,
+        .pos = {x, y},
 
-    char t1_letter = gen_random_letter();
-    char t2_letter = gen_random_letter();
-    LOG("queue_next: t1.letter=%c t2.letter=%c", t1_letter, t2_letter);
+        .obj = (obj_t){
+            .sprite = &sprites[letter - 'A'],
+            .pos = {x * w + grid.obj.pos.x, y * h + grid.obj.pos.y},
+            .size = {w, h},
+        },
+    };
 
-    queue.tiles[0] = new_tile(true, t1_letter, t1_pos);
-    queue.tiles[1] = new_tile(true, t2_letter, t2_pos);
+    return t;
+}
 
-    queue.tiles[0].sprite = &sprites[t1_letter - 'A'];
-    queue.tiles[1].sprite = &sprites[t2_letter - 'A'];
+static void queue_enqueue() {
+
+    // queue.tiles[0] = new_tile(true, t1_letter, t1_pos);
+    // queue.tiles[1] = new_tile(true, t2_letter, t2_pos);
+    queue.tiles[0] = *tile_create(gen_random_letter(), true, false, -1, -1, 64, 64);
+    queue.tiles[1] = *tile_create(gen_random_letter(), true, false, -1, -1, 64, 64);
 }
 
 static void spawn_player() {
     player.t1 = queue.tiles[0];
     player.t2 = queue.tiles[1];
+
+    player.t1.pos = (vec2i){(grid.width / 2) - 1, 0};
+    player.t2.pos = (vec2i){(grid.width / 2), 0};
 
     player.active = true;
 }
@@ -350,7 +391,7 @@ static bool update_falling() {
     bool fall = false;
 
     vec2i move = {0, 1};
-    for (int i = ((grid.w * grid.h) - grid.w) - 1; i > -1; i--) {
+    for (int i = ((grid.width * grid.height) - grid.width) - 1; i > -1; i--) {
         if (check_tile_move(grid.tiles[i], move)) {
             move_tile(&grid.tiles[i], move);
             fall = true;
@@ -361,10 +402,15 @@ static bool update_falling() {
 }
 
 static void update_world_physics() {
+    // anything falling? if not, check for marked tiles
     if (!update_falling()) {
-        state.halt = false;
+        state.halt = grid_scan();
+
+        // tiles were removed - don't spawn player yet
+        if (state.halt) return;
+
         spawn_player();
-        queue_next();
+        queue_enqueue();
     }
 }
 
@@ -374,7 +420,6 @@ void stop_player() {
     clear_player();
 
     player.active = false;
-    grid_scan();
 }
 
 static void update_player_physics() {
@@ -426,7 +471,7 @@ static void handle_input() {
             case SDL_MOUSEBUTTONDOWN: {
                 int tile_index = pix_pos_to_grid_index(state.mouse_pos);
                 tile_t t = grid.tiles[tile_index];
-                LOG("tile %d info: {.letter='%c', .pos=(%d, %d), .filled=%d, .marked=%d }", tile_index, t.letter, t.pos.x, t.pos.y, t.filled, t.marked);
+                LOG("CLICK - tile %d info: {.letter='%c', .pos=(%d, %d), .filled=%d, .marked=%d }", tile_index, t.letter, t.pos.x, t.pos.y, t.filled, t.marked);
                 tile_set_marked(&grid.tiles[tile_index], true);
                 break;
             }
@@ -453,67 +498,6 @@ static void handle_input() {
                             move_player(move);
                         break;
                     }
-                    case SDLK_k:
-                    case SDLK_e: {
-                        int x1 = player.t1.pos.x;
-                        int x2 = player.t2.pos.x;
-                        int y1 = player.t1.pos.y;
-                        int y2 = player.t2.pos.y;
-
-                        int move_x, move_y;
-
-                        if (x1 <= x2 && y1 == y2) {
-                            move_x = 1;
-                            move_y = -1;
-                        }
-                        else if (x1 == x2 && y1 < y2) {
-                            move_x = 1;
-                            move_y = 1;
-                        }
-                        else if (x1 >= x2 && y1 == y2) {
-                            move_x = -1;
-                            move_y = 1;
-                        } else {
-                            move_x = -1;
-                            move_y = -1;
-                        }
-
-                        vec2i move = (vec2i){move_x, move_y};
-                        if (check_tile_move(player.t1, move) && check_tile_in_grid(player.t1, move))
-                            player.t1.pos = vector_add(player.t1.pos, move);
-                        break;
-                    }
-                    case SDLK_j:
-                    case SDLK_q: {
-
-                        int x2 = player.t1.pos.x;
-                        int x1 = player.t2.pos.x;
-                        int y2 = player.t1.pos.y;
-                        int y1 = player.t2.pos.y;
-
-                        int move_x, move_y;
-
-                        if (x1 <= x2 && y1 == y2) {
-                            move_x = 1;
-                            move_y = 1;
-                        }
-                        else if (x1 == x2 && y1 < y2) {
-                            move_x = -1;
-                            move_y = 1;
-                        }
-                        else if (x1 >= x2 && y1 == y2) {
-                            move_x = -1;
-                            move_y = -1;
-                        } else {
-                            move_x = 1;
-                            move_y = -1;
-                        }
-
-                        vec2i move = (vec2i){move_x, move_y};
-                        if (check_tile_move(player.t2, move) && check_tile_in_grid(player.t2, move))
-                            player.t2.pos = vector_add(player.t2.pos, move);
-                        break;
-                    }
                     case SDLK_s:
                     case SDLK_DOWN: {
                         vec2i move = (vec2i){0, 1};
@@ -531,7 +515,7 @@ static void handle_input() {
                         flip_player();
                         break;
                     case SDLK_SPACE:
-                        clear_grid();
+                        grid_clear();
                         break;
                     default:
                         break;
@@ -539,6 +523,27 @@ static void handle_input() {
                 break;
         }
     }
+}
+
+static void grid_init(int cols, int rows, int x, int y) {
+    grid.width = cols;
+    grid.height = rows;
+    grid.obj = (obj_t){
+        .pos = {x, y},
+        .sprite = &((sprite){}),
+        .size = {cols * TILE_SIZE, rows * TILE_SIZE},
+    };
+}
+
+static void queue_init(int w, int h, int x, int y) {
+    LOG("Creating queue...");
+    queue.obj = (obj_t){
+        .size = {w, h},
+        .pos = {x, y},
+        .sprite = &sprites[26],
+    };
+    queue_enqueue();
+    LOG("Queue created");
 }
 
 int main(int argc, char *argv[]) {
@@ -553,23 +558,19 @@ int main(int argc, char *argv[]) {
     state.texture = SDL_CreateTexture(state.renderer, SDL_PIXELFORMAT_ABGR8888, SDL_TEXTUREACCESS_STREAMING, SCREEN_WIDTH, SCREEN_HEIGHT);
     ASSERT(state.renderer, "Failed to create SDL Texture: %s\n", SDL_GetError());
 
+    SDL_SetTextureBlendMode(state.texture, SDL_BLENDMODE_BLEND);
     SDL_SetRenderDrawBlendMode(state.renderer, SDL_BLENDMODE_BLEND);
 
     srand(time(NULL));
 
-    grid.w = 8;
-    grid.h = 10;
-    grid.offset = vec2_create((SCREEN_WIDTH / 2) - ((grid.w * TILE_SIZE) / 2), TILE_SIZE / 2);
-
-    clear_grid();
+    grid_init(8, 10, (SCREEN_WIDTH / 2) - ((8 * TILE_SIZE) / 2), TILE_SIZE / 2);
 
     load_sprites();
 
-    queue.offset = vec2_create(SCREEN_WIDTH - (3 * TILE_SIZE), TILE_SIZE * 1.5);
+    queue_init(64 * 3, 64 * 2, (SCREEN_WIDTH - (3 * TILE_SIZE)) - 16, TILE_SIZE * 1.5);
 
-    queue_next();
     spawn_player();
-    queue_next();
+    queue_enqueue();
 
     state.tick = 1000.0;
     state.time = SDL_GetTicks();

@@ -1,5 +1,8 @@
 
 #include "../include/sprite.h"
+#include "../include/macros.h"
+#include <stdio.h>
+#include <stdlib.h>
 
 void sprite_push_to_buf(sprite sp, int x, int y, u32 *buf, u32 buf_width, u32 buf_height) {
     for (int i = 0; i < sp.width * sp.height; i++) {
@@ -12,6 +15,7 @@ void sprite_push_to_buf(sprite sp, int x, int y, u32 *buf, u32 buf_width, u32 bu
 
 sprite sprite_create(usize w, usize h, u32 color) {
     sprite sp;
+    ASSERT(w < SPRITE_MAX_W && h < SPRITE_MAX_H, "%zu or %zu exceeds max sprite width %d or height %d", w, h, SPRITE_MAX_W, SPRITE_MAX_H);
     sp.width = w;
     sp.height = h;
     for (int i = 0; i < w * h; i++) {

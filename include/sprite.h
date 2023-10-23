@@ -1,9 +1,12 @@
 #pragma once
 #include "types.h"
 
+#define SPRITE_MAX_W 256
+#define SPRITE_MAX_H 256
+
 typedef struct {
     usize width, height;
-    u32 pixels[64 * 64];
+    u32 pixels[SPRITE_MAX_W * SPRITE_MAX_H];
 } sprite;
 
 void sprite_push_to_buf(sprite sp, int x, int y, u32 *buf, u32 buf_width, u32 buf_height);
