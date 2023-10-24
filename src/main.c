@@ -10,6 +10,7 @@
 #include <time.h>
 #include "../include/macros.h"
 
+
 struct {
     SDL_Window *window;
     SDL_Texture *texture;
@@ -18,9 +19,17 @@ struct {
     struct TrieNode *dict_trie;
     struct LetterPool letter_pool;
 
+    enum {
+        PLACE_HOLDER = 0,
+        HALT = 1 < 0,
+        PLAYING = 1 < 1,
+        QUIT = 1 < 2,
+        PAUSED = 1 < 3,
+    } game_status;
+
     vec2i mouse_pos;
     u32 pixels[SCREEN_WIDTH * SCREEN_HEIGHT];
-    bool quit, halt, paused, begin, gameover;
+    bool quit, halt, paused, begin, gameover, clearing;
     double time;
     double tick;
 } state;
@@ -65,6 +74,11 @@ struct {
     obj_t obj;
 } queue;
 
+
+static void obj_render(obj_t *obj) {
+    SDL_UpdateTexture(state.texture, &(SDL_Rect){.x=obj->pos.x, .y=obj->pos.y, .w=obj->size.x, .h=obj->size.y}, obj->sprite->pixels, obj->size.x * 4);
+}
+
 static void sprite_render(int x, int y, sprite *s) {
     SDL_UpdateTexture(state.texture, &(SDL_Rect){.x=x, .y=y, .w=s->width, .h=s->height}, s->pixels, s->width * 4);
 }
@@ -77,24 +91,21 @@ static void queue_render() {
     u32 x = queue.obj.pos.x;
     u32 y = queue.obj.pos.y;
 
+    // border
     sprite_render(x, y, queue.obj.sprite);
 
-    sprite_render(x + 32, y + 32, queue.tiles[0].obj.sprite);
-    sprite_render(x + 64 + 32, y + 32, queue.tiles[1].obj.sprite);
+    // tiles
+    int gap_x = queue.tiles[0].obj.size.x / 2;
+    int gap_y = queue.tiles[0].obj.size.y / 2;
+
+    sprite_render(x + gap_x, y + gap_y, queue.tiles[0].obj.sprite);
+    sprite_render(x + gap_x * 3, y + gap_y, queue.tiles[1].obj.sprite);
 }
 
 
 static int pix_pos_to_grid_index(vec2i world_pos) {
     vec2i grid_pos = {.x = ((world_pos.x - grid.obj.pos.x) / TILE_SIZE), .y = (world_pos.y - grid.obj.pos.y) / TILE_SIZE};
     return (grid_pos.y * grid.width) + grid_pos.x;
-}
-
-static void grid_debug_print() {
-    for (int i = 0; i < GAMEBOARD_WIDTH * GAMEBOARD_HEIGHT; i++) {
-        printf("%d", grid.tiles[i].filled);
-        if ((i + 1) % GAMEBOARD_WIDTH == 0)
-            printf("\n");
-    }
 }
 
 static u32 at(uint x, uint y, u32 width) {
@@ -141,7 +152,7 @@ static void draw_tile(tile_t t) {
         u32 *pixels = clone_pixels(t.obj.sprite->pixels, t.obj.sprite->width * t.obj.sprite->height);
 
         for (int i = 0; i < t.obj.sprite->width * t.obj.sprite->height; i++) {
-            pixels[i] |= 0xFF1122FF;
+            pixels[i] |= 0xFFCCCC99;
         }
 
         pix_buf_render(x, y, t.obj.sprite->width, t.obj.sprite->height, pixels);
@@ -411,10 +422,11 @@ static bool grid_clear_marked() {
 static bool grid_scan_marked() {
     bool marked = false;
     LOG("Scanning...");
-    state.halt = true;
 
     marked = grid_scan_hori();
     marked = marked || grid_scan_vert();
+
+    LOG("Clearing should be %d", marked);
 
     return marked;
 }
@@ -524,9 +536,9 @@ static bool update_falling() {
 static void update_world_physics() {
     // anything falling? if not, check for marked tiles
     if (!update_falling()) {
+        state.halt = false;
         grid_scan_marked();
 
-        state.halt = grid_clear_marked();
         // tiles were removed - don't spawn player yet
         if (state.halt) return;
 
@@ -582,6 +594,47 @@ void tile_set_marked(tile_t *t, bool marked) {
     t->marked = marked;
 }
 
+static void rotate_player_cw() {
+    if (player.t1.pos.x < player.t2.pos.x) {
+        LOG("cw rotation 1");
+        player.t1.pos.y -= 1;
+        player.t2.pos.x -= 1;
+    } else if (player.t1.pos.x == player.t2.pos.x && player.t1.pos.y < player.t2.pos.y) {
+        LOG("cw rotation 2");
+        player.t1.pos.y += 1;
+        player.t1.pos.x += 1;
+    } else if (player.t1.pos.x > player.t2.pos.x && player.t1.pos.y == player.t2.pos.y) {
+        LOG("cw rotation 3");
+        player.t1.pos.x -= 1;
+        player.t2.pos.y -= 1;
+    } else {
+        LOG("cw rotation 4");
+        player.t2.pos.x += 1;
+        player.t2.pos.y += 1;
+    }
+}
+
+static void rotate_player_ccw() {
+    if (player.t1.pos.x < player.t2.pos.x) {
+        LOG("ccw rotation 1");
+        player.t1.pos.x += 1;
+        player.t2.pos.y -= 1;
+    } else if (player.t1.pos.x == player.t2.pos.x && player.t1.pos.y > player.t2.pos.y) {
+        LOG("ccw rotation 2");
+        player.t2.pos.x -= 1;
+        player.t2.pos.y += 1;
+    } else if (player.t1.pos.x > player.t2.pos.x && player.t1.pos.y == player.t2.pos.y) {
+        LOG("ccw rotation 3");
+        player.t2.pos.x += 1;
+        player.t1.pos.y -= 1;
+    } else {
+        LOG("ccw rotation 4");
+        player.t1.pos.y += 1;
+        player.t1.pos.x -= 1;
+    }
+
+}
+
 static void handle_input() {
     SDL_Event ev;
     while (SDL_PollEvent(&ev)) {
@@ -633,13 +686,20 @@ static void handle_input() {
                         }
                         break;
                     }
+                    case SDLK_k:
+                        rotate_player_cw();
+                        break;
+                    case SDLK_j:
+                        rotate_player_ccw();
+                        break;
                     case SDLK_w:
                     case SDLK_UP:
                         flip_player();
                         break;
                     case SDLK_SPACE:
-                        grid_clear();
-                        state.paused = !state.paused;
+                        // grid_clear();
+                        LOG("halt=%d, clearing=%d", state.halt, state.clearing);
+                        // state.paused = !state.paused;
                         break;
                     default:
                         break;
