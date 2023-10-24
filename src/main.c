@@ -5,6 +5,8 @@
 #include "../include/types.h"
 #include "../include/vec.h"
 #include "../include/sprite.h"
+#include "../include/lpool.h"
+#include "../include/trie.h"
 #include <time.h>
 #include "../include/macros.h"
 
@@ -12,6 +14,10 @@ struct {
     SDL_Window *window;
     SDL_Texture *texture;
     SDL_Renderer *renderer;
+
+    struct TrieNode *dict_trie;
+    struct LetterPool letter_pool;
+
     vec2i mouse_pos;
     u32 pixels[SCREEN_WIDTH * SCREEN_HEIGHT];
     bool quit, halt, paused, begin, gameover;
@@ -59,19 +65,22 @@ struct {
     obj_t obj;
 } queue;
 
-static void write_pixel_block(int x, int y, sprite *s) {
+static void sprite_render(int x, int y, sprite *s) {
     SDL_UpdateTexture(state.texture, &(SDL_Rect){.x=x, .y=y, .w=s->width, .h=s->height}, s->pixels, s->width * 4);
+}
+
+static void pix_buf_render(int x, int y, int w, int h, u32 *pixels) {
+    SDL_UpdateTexture(state.texture, &(SDL_Rect){.x=x, .y=y, .w=w, .h=h}, pixels, w * 4);
 }
 
 static void queue_render() {
     u32 x = queue.obj.pos.x;
     u32 y = queue.obj.pos.y;
 
+    sprite_render(x, y, queue.obj.sprite);
 
-    write_pixel_block(x, y, queue.obj.sprite);
-
-    write_pixel_block(x + 32, y + 32, queue.tiles[0].obj.sprite);
-    write_pixel_block(x + 64 + 32, y + 32, queue.tiles[1].obj.sprite);
+    sprite_render(x + 32, y + 32, queue.tiles[0].obj.sprite);
+    sprite_render(x + 64 + 32, y + 32, queue.tiles[1].obj.sprite);
 }
 
 
@@ -94,7 +103,7 @@ static u32 at(uint x, uint y, u32 width) {
 
 static void grid_clear() {
     for (int i = 0; i < grid.width * grid.height; i++)
-        grid.tiles[i] = (tile_t){};
+        grid.tiles[i] = (tile_t){.letter=' '};
 }
 
 
@@ -120,7 +129,7 @@ static void horiline(int x0, int x1, int y, u32 color) {
 }
 
 static u32 * clone_pixels(u32 const * src, size_t len) {
-   u32 * p = malloc(len * sizeof(u32));
+   u32 *p = malloc(len * sizeof(u32));
    memcpy(p, src, len * sizeof(u32));
    return p;
 }
@@ -135,10 +144,9 @@ static void draw_tile(tile_t t) {
             pixels[i] |= 0xFF1122FF;
         }
 
-        sprite s = sprite_create_from(t.obj.size.x, t.obj.size.y, pixels);
-        write_pixel_block(x, y, &s);
+        pix_buf_render(x, y, t.obj.sprite->width, t.obj.sprite->height, pixels);
     } else {
-        write_pixel_block(x, y, t.obj.sprite);
+        sprite_render(x, y, t.obj.sprite);
     }
 }
 
@@ -253,7 +261,7 @@ static void move_tile(tile_t *t, vec2i move) {
     int old_idx = (t->pos.y * grid.width) + t->pos.x;
     t->pos = vector_add(t->pos, move);
     grid.tiles[(t->pos.y * grid.width) + t->pos.x] = *t;
-    grid.tiles[old_idx] = (tile_t){};
+    grid.tiles[old_idx] = (tile_t){.letter = ' '};
 }
 
 static void move_player(vec2i move) {
@@ -264,13 +272,127 @@ static void move_player(vec2i move) {
 
 
 static void clear_player() {
-    player.t1 = (tile_t){};
-    player.t2 = (tile_t){};
+    player.t1 = (tile_t){.letter = ' '};
+    player.t2 = (tile_t){.letter = ' '};
 }
 
-static void grid_scan_hori() {
-    for (int i = 1; i < grid.width * grid.height; i++) {
+// word is viable if it contains and vowel and a consonant
+static bool check_word_viability(char* word) {
+    bool contains_vowel = false;
+    bool contains_consonant = false;
+
+    for (int i = 0; i < strlen(word); i++) {
+        if (word[i] == 'a' || word[i] == 'e' || word[i] == 'i' || word[i] == 'o' || word[i] == 'u') {
+            contains_vowel = true;
+        } else {
+            contains_consonant = true;
+        }
     }
+
+    return contains_vowel && contains_consonant;
+}
+
+// check that a substring is the minimum length and contains no spaces.
+static const bool check_string_validity(const char* substring) {
+    const int length = strlen(substring);
+
+    if (length < 3) {
+        return false;
+    }
+
+    for (int i = 0; i < length; i++) {
+        if (substring[i] == ' ') {
+            return false;
+        }
+    }
+
+    return true;
+}
+
+
+// check for words in a given row of characters
+static bool check_substrings(const char* str, const int* position) {
+    int len = strlen(str);
+    int maxLen = len < grid.height ? len : grid.height;
+
+    for (int subLen = maxLen; subLen >= 3; subLen--) {
+        for (int i = 0; i <= len - subLen; i++) {
+            char substr[subLen + 1];
+            strncpy(substr, str + i, subLen);
+            substr[subLen] = '\0';
+
+            if (check_word_viability(substr) && check_string_validity(substr)) {
+                if (trie_search_word(state.dict_trie, substr)) {
+                    int indexStart = i;
+                    int indexEnd = i + subLen;
+
+                    for (int x = indexStart; x < indexEnd; x++) {
+                        grid.tiles[position[x]].marked = true;
+                    }
+
+                    return true;
+                }
+            }
+        }
+    }
+
+    return false;
+}
+
+
+static bool grid_scan_hori() {
+    bool found_word = false;
+    // Horizontal check
+    for (int i = 0; i < grid.height * grid.width; i += grid.width) {
+        struct {
+            char letters[8];
+            int indexes[8];
+        } row;
+
+        // char line[grid.width];
+        for (int j = 0; j < grid.width; j++) {
+            if (grid.tiles[i + j].filled && !grid.tiles[i + j].marked)
+                row.letters[j] = tolower(grid.tiles[i+j].letter);
+            else
+                row.letters[j] = ' ';
+            
+            row.indexes[j] = i + j;
+        }
+
+        found_word = check_substrings(row.letters, row.indexes);
+        if (found_word)
+            LOG("FOUND at row %d: '%s'", i / 8, row.letters);
+    }
+
+    return found_word;
+}
+
+static bool grid_scan_vert() {
+    bool found_word = false;
+    // Vertical check
+    for (int i = 0; i < grid.width; i += 1) {
+        struct {
+            char letters[10];
+            int indexes[10];
+        } col;
+
+        for (int j = 0; j < grid.height; j += 1) {
+            int idx = j * grid.width + i;
+
+            if (grid.tiles[idx].filled && !grid.tiles[idx].marked)
+                col.letters[j] = tolower(grid.tiles[idx].letter);
+            else
+                col.letters[j] = ' ';
+
+            col.indexes[j] = idx;
+        }
+
+        found_word = check_substrings(col.letters, col.indexes);
+        if (found_word)
+            LOG("FOUND in col %d: '%s'", i / 10, col.letters);
+    }
+
+    return found_word;
 }
 
 // returns true if any tiles were cleared - that way we know to check for falling tiles
@@ -279,22 +401,24 @@ static bool grid_clear_marked() {
     for (int i = 0; i < grid.width * grid.height; i++) {
         if (grid.tiles[i].marked) {
             cleared = true;
-            grid.tiles[i] = (tile_t){};
+            grid.tiles[i] = (tile_t){.letter = ' '};
         }
     }
 
     return cleared;
 }
 
-static bool grid_scan() {
-    bool cleared = false;
+static bool grid_scan_marked() {
+    bool marked = false;
     LOG("Scanning...");
     state.halt = true;
-    grid_scan_hori();
-    cleared = grid_clear_marked();
 
-    return cleared;
+    marked = grid_scan_hori();
+    marked = marked || grid_scan_vert();
+
+    return marked;
 }
+
 
 u32 *load_img_pixels(const char *file)
 {
@@ -308,10 +432,6 @@ u32 *load_img_pixels(const char *file)
     return pixels;
 }
 
-
-static char gen_random_letter() {
-    return 65 + (rand() % 26);
-}
 
 static const char* letter_textures[] = {
     "gfx/TileA.png",
@@ -373,8 +493,8 @@ static void queue_enqueue() {
 
     // queue.tiles[0] = new_tile(true, t1_letter, t1_pos);
     // queue.tiles[1] = new_tile(true, t2_letter, t2_pos);
-    queue.tiles[0] = *tile_create(gen_random_letter(), true, false, -1, -1, 64, 64);
-    queue.tiles[1] = *tile_create(gen_random_letter(), true, false, -1, -1, 64, 64);
+    queue.tiles[0] = *tile_create(lpool_random_letter(&state.letter_pool), true, false, -1, -1, 64, 64);
+    queue.tiles[1] = *tile_create(lpool_random_letter(&state.letter_pool), true, false, -1, -1, 64, 64);
 }
 
 static void spawn_player() {
@@ -404,8 +524,9 @@ static bool update_falling() {
 static void update_world_physics() {
     // anything falling? if not, check for marked tiles
     if (!update_falling()) {
-        state.halt = grid_scan();
+        grid_scan_marked();
 
+        state.halt = grid_clear_marked();
         // tiles were removed - don't spawn player yet
         if (state.halt) return;
 
@@ -500,13 +621,15 @@ static void handle_input() {
                     }
                     case SDLK_s:
                     case SDLK_DOWN: {
-                        vec2i move = (vec2i){0, 1};
-                        if (player_check_movement(move)) {
-                            state.time = SDL_GetTicks();
-                            move_player(move);
-                        }
-                        else {
-                            stop_player();
+                        if (!state.halt) {
+                            vec2i move = (vec2i){0, 1};
+                            if (player_check_movement(move)) {
+                                state.time = SDL_GetTicks();
+                                move_player(move);
+                            }
+                            else {
+                                stop_player();
+                            }
                         }
                         break;
                     }
@@ -516,6 +639,7 @@ static void handle_input() {
                         break;
                     case SDLK_SPACE:
                         grid_clear();
+                        state.paused = !state.paused;
                         break;
                     default:
                         break;
@@ -525,18 +649,26 @@ static void handle_input() {
     }
 }
 
-static void grid_init(int cols, int rows, int x, int y) {
+static void grid_init(int cols, int rows) {
+    int grid_x = (SCREEN_WIDTH / 2) - ((8 * TILE_SIZE) / 2);
+    int grid_y = TILE_SIZE / 2;
+
     grid.width = cols;
     grid.height = rows;
     grid.obj = (obj_t){
-        .pos = {x, y},
+        .pos = {grid_x, grid_y},
         .sprite = &((sprite){}),
         .size = {cols * TILE_SIZE, rows * TILE_SIZE},
     };
 }
 
-static void queue_init(int w, int h, int x, int y) {
+static void queue_init() {
     LOG("Creating queue...");
+    int x = (SCREEN_WIDTH - (4 * TILE_SIZE));
+    int y = TILE_SIZE * 1.5;
+    int w = 64 * 3;
+    int h = 64 * 2;
+
     queue.obj = (obj_t){
         .size = {w, h},
         .pos = {x, y},
@@ -547,28 +679,48 @@ static void queue_init(int w, int h, int x, int y) {
 }
 
 int main(int argc, char *argv[]) {
-    ASSERT(!SDL_Init(SDL_INIT_VIDEO), "SDL failed to initialize: %s\n", SDL_GetError());
+    ASSERT(!SDL_Init(SDL_INIT_VIDEO),
+           "SDL failed to initialize: %s\n", SDL_GetError());
 
-    state.window = SDL_CreateWindow("Wordtris", SDL_WINDOWPOS_CENTERED_DISPLAY(1), SDL_WINDOWPOS_CENTERED_DISPLAY(1), SCREEN_WIDTH, SCREEN_HEIGHT, SDL_WINDOW_ALLOW_HIGHDPI);
-    ASSERT(state.window, "Failed to create SDL Window: %s\n", SDL_GetError());
+    state.window
+        = SDL_CreateWindow(
+            "Wordtris",
+            SDL_WINDOWPOS_CENTERED_DISPLAY(1),
+            SDL_WINDOWPOS_CENTERED_DISPLAY(1),
+            SCREEN_WIDTH, SCREEN_HEIGHT,
+            SDL_WINDOW_ALLOW_HIGHDPI);
 
-    state.renderer = SDL_CreateRenderer(state.window, -1, SDL_RENDERER_PRESENTVSYNC);
-    ASSERT(state.renderer, "Failed to create SDL Renderer: %s\n", SDL_GetError());
+    ASSERT(state.window,
+           "Failed to create SDL Window: %s\n", SDL_GetError());
 
-    state.texture = SDL_CreateTexture(state.renderer, SDL_PIXELFORMAT_ABGR8888, SDL_TEXTUREACCESS_STREAMING, SCREEN_WIDTH, SCREEN_HEIGHT);
-    ASSERT(state.renderer, "Failed to create SDL Texture: %s\n", SDL_GetError());
+    state.renderer
+        = SDL_CreateRenderer(state.window, -1, SDL_RENDERER_PRESENTVSYNC);
 
-    SDL_SetTextureBlendMode(state.texture, SDL_BLENDMODE_BLEND);
-    SDL_SetRenderDrawBlendMode(state.renderer, SDL_BLENDMODE_BLEND);
+    ASSERT(state.renderer,
+           "Failed to create SDL Renderer: %s\n", SDL_GetError());
+
+    state.texture
+        = SDL_CreateTexture(state.renderer,
+                            SDL_PIXELFORMAT_ABGR8888,
+                            SDL_TEXTUREACCESS_STREAMING,
+                            SCREEN_WIDTH,
+                            SCREEN_HEIGHT);
+
+    ASSERT(state.renderer,
+           "Failed to create SDL Texture: %s\n", SDL_GetError());
+
 
     srand(time(NULL));
-
-    grid_init(8, 10, (SCREEN_WIDTH / 2) - ((8 * TILE_SIZE) / 2), TILE_SIZE / 2);
-
     load_sprites();
 
-    queue_init(64 * 3, 64 * 2, (SCREEN_WIDTH - (3 * TILE_SIZE)) - 16, TILE_SIZE * 1.5);
+    state.dict_trie = trie_node_create();
+    trie_construct(state.dict_trie, "./dictionary.txt");
 
+    lpool_init(&state.letter_pool);
+    lpool_populate(&state.letter_pool);
+
+    grid_init(8, 10);
+    queue_init();
     spawn_player();
     queue_enqueue();
 
@@ -576,7 +728,6 @@ int main(int argc, char *argv[]) {
     state.time = SDL_GetTicks();
 
     while (!state.quit) {
-
         update_tick();
 
         handle_input();
