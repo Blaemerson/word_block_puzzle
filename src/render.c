@@ -2,7 +2,6 @@
 #include "../include/macros.h"
 
 void obj_render(obj_info_t *obj, SDL_Texture *tex) {
-    LOG("obj_render");
     SDL_UpdateTexture(tex,
                       &(SDL_Rect){.x=obj->pos.x, .y=obj->pos.y, .w=obj->size.x, .h=obj->size.y},
                       obj->sprite->pixels,
@@ -10,7 +9,6 @@ void obj_render(obj_info_t *obj, SDL_Texture *tex) {
 }
 
 void sprite_render(int x, int y, sprite *s, SDL_Texture *tex) {
-    LOG("sprite_render");
     SDL_UpdateTexture(tex,
                       &(SDL_Rect){.x=x, .y=y, .w=s->width, .h=s->height},
                       s->pixels,
@@ -18,7 +16,6 @@ void sprite_render(int x, int y, sprite *s, SDL_Texture *tex) {
 }
 
 void pix_buf_render(int x, int y, int w, int h, u32 *pixels, SDL_Texture *tex) {
-    LOG("pix_buf_render");
     SDL_UpdateTexture(tex,
                       &(SDL_Rect){.x=x, .y=y, .w=w, .h=h},
                       pixels,

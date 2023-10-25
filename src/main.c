@@ -1,3 +1,4 @@
+#include <math.h>
 #include <stdio.h>
 #include <stdbool.h>
 
@@ -23,12 +24,12 @@ struct {
 
     vec2i mouse_pos;
     u32 pixels[SCREEN_WIDTH * SCREEN_HEIGHT];
-    bool quit, halt, paused, begin, gameover, clearing;
+    bool quit, updating_physics, paused, begin, gameover, clearing;
     double time;
     double tick;
 } state;
 
-struct {
+struct grid {
     uint height, width;
     tile_t tiles[GAMEBOARD_MAX];
 
@@ -41,8 +42,22 @@ struct {
     obj_info_t obj;
 } queue;
 
+
+typedef enum {
+    CLOCKWISE,
+    COUNTER_CLOCKWISE,
+} rotation_t;
+
+typedef enum {
+    HORI_AB,
+    VERT_AB,
+    HORI_BA,
+    VERT_BA,
+} player_orientation_t;
+
 struct {
     bool active;
+    player_orientation_t or;
     tile_t t1, t2;
 } player;
 
@@ -125,12 +140,10 @@ static void draw_grid() {
     int x = grid.obj.pos.x;
     int y = grid.obj.pos.y;
 
-    LOG("verlines");
     for (int i = 0; i < (grid.width * TILE_SIZE) + 1; i += TILE_SIZE) {
         verline(i + x, y, grid.height * TILE_SIZE + y, line_color, state.pixels, SCREEN_WIDTH);
     }
 
-    LOG("verlines");
     for (int i = y; i < (grid.height * TILE_SIZE) + 1 + y; i += TILE_SIZE) {
         horiline(x, (grid.width * TILE_SIZE) + x, i, line_color, state.pixels, SCREEN_WIDTH);
     }
@@ -174,22 +187,14 @@ static void set_player() {
 // }
 
 static void render() {
-    LOG("1");
     clear_pixel_buf(state.pixels, SCREEN_WIDTH * SCREEN_HEIGHT);
-    LOG("2");
     draw_bg();
-    LOG("3");
     draw_grid();
 
-    LOG("4");
     SDL_UpdateTexture(state.texture, NULL, state.pixels, SCREEN_WIDTH * 4);
-    LOG("5");
 
-    LOG("6");
     draw_tiles();
-    LOG("7");
 
-    LOG("8");
     queue_render();
 
     if (player.active) draw_player();
@@ -299,6 +304,7 @@ static bool check_substrings(const char* str, const int* position) {
 
                     for (int x = indexStart; x < indexEnd; x++) {
                         grid.tiles[position[x]].marked = true;
+                        LOG("Marked %d", position[x]);
                     }
 
                     return true;
@@ -330,7 +336,7 @@ static bool grid_scan_hori() {
             row.indexes[j] = i + j;
         }
 
-        found_word = check_substrings(row.letters, row.indexes);
+        found_word = check_substrings(row.letters, row.indexes) || found_word;
         if (found_word)
             LOG("FOUND at row %d: '%s'", i / 8, row.letters);
     }
@@ -358,9 +364,9 @@ static bool grid_scan_vert() {
             col.indexes[j] = idx;
         }
 
-        found_word = check_substrings(col.letters, col.indexes);
+        found_word = check_substrings(col.letters, col.indexes) || found_word;
         if (found_word)
-            LOG("FOUND in col %d: '%s'", i / 10, col.letters);
+            LOG("FOUND in col %d: '%s'", i, col.letters);
     }
 
     return found_word;
@@ -381,12 +387,11 @@ static bool grid_clear_marked() {
 
 static bool grid_scan_marked() {
     bool marked = false;
-    LOG("Scanning...");
 
     marked = grid_scan_hori();
     marked = marked || grid_scan_vert();
 
-    LOG("Clearing should be %d", marked);
+    LOG("Scanning... clearing should be %d", marked);
 
     return marked;
 }
@@ -406,32 +411,13 @@ u32 *load_img_pixels(const char *file)
 
 
 static const char* letter_textures[] = {
-    "gfx/TileA.png",
-    "gfx/TileB.png",
-    "gfx/TileC.png",
-    "gfx/TileD.png",
-    "gfx/TileE.png",
-    "gfx/TileF.png",
-    "gfx/TileG.png",
-    "gfx/TileH.png",
-    "gfx/TileI.png",
-    "gfx/TileJ.png",
-    "gfx/TileK.png",
-    "gfx/TileL.png",
-    "gfx/TileM.png",
-    "gfx/TileN.png",
-    "gfx/TileO.png",
-    "gfx/TileP.png",
-    "gfx/TileQ.png",
-    "gfx/TileR.png",
-    "gfx/TileS.png",
-    "gfx/TileT.png",
-    "gfx/TileU.png",
-    "gfx/TileV.png",
-    "gfx/TileW.png",
-    "gfx/TileX.png",
-    "gfx/TileY.png",
-    "gfx/TileZ.png",
+    "gfx/TileA.png", "gfx/TileB.png", "gfx/TileC.png", "gfx/TileD.png",
+    "gfx/TileE.png", "gfx/TileF.png", "gfx/TileG.png", "gfx/TileH.png",
+    "gfx/TileI.png", "gfx/TileJ.png", "gfx/TileK.png", "gfx/TileL.png",
+    "gfx/TileM.png", "gfx/TileN.png", "gfx/TileO.png", "gfx/TileP.png",
+    "gfx/TileQ.png", "gfx/TileR.png", "gfx/TileS.png", "gfx/TileT.png",
+    "gfx/TileU.png", "gfx/TileV.png", "gfx/TileW.png", "gfx/TileX.png",
+    "gfx/TileY.png", "gfx/TileZ.png",
 };
 
 static sprite sprites[27];
@@ -444,7 +430,7 @@ static void load_sprites() {
     sprites[26] = sprite_create_from(64 * 3, 64 * 2, load_img_pixels("gfx/QueueBorder.png"));
 }
 
-static tile_t *tile_create(u8 letter, bool filled, bool marked, uint x, uint y, uint h, uint w) {
+static tile_t *tile_create(u8 letter, bool filled, bool marked, uint x, uint y) {
     tile_t *t = &(tile_t){
         .letter = letter,
         .filled = filled,
@@ -453,8 +439,8 @@ static tile_t *tile_create(u8 letter, bool filled, bool marked, uint x, uint y, 
 
         .obj = (obj_info_t){
             .sprite = &sprites[letter - 'A'],
-            .pos = {x * w + grid.obj.pos.x, y * h + grid.obj.pos.y},
-            .size = {w, h},
+            .pos = {x * TILE_SIZE + grid.obj.pos.x, y * TILE_SIZE + grid.obj.pos.y},
+            .size = {TILE_SIZE, TILE_SIZE},
         },
     };
 
@@ -462,15 +448,14 @@ static tile_t *tile_create(u8 letter, bool filled, bool marked, uint x, uint y, 
 }
 
 static void queue_enqueue() {
-
-    // queue.tiles[0] = new_tile(true, t1_letter, t1_pos);
-    // queue.tiles[1] = new_tile(true, t2_letter, t2_pos);
-    queue.tiles[0] = *tile_create(lpool_random_letter(&state.letter_pool), true, false, -1, -1, 64, 64);
-    queue.tiles[1] = *tile_create(lpool_random_letter(&state.letter_pool), true, false, -1, -1, 64, 64);
+    queue.tiles[0] = *tile_create(lpool_random_letter(&state.letter_pool), true, false, -1, -1);
+    queue.tiles[1] = *tile_create(lpool_random_letter(&state.letter_pool), true, false, -1, -1);
     LOG("Enqueued two tiles");
 }
 
 static void spawn_player() {
+    player.or = HORI_AB;
+
     player.t1 = queue.tiles[0];
     player.t2 = queue.tiles[1];
 
@@ -482,37 +467,23 @@ static void spawn_player() {
     LOG("spawned player");
 }
 
-static bool update_falling() {
-    bool fall = false;
+static bool update_world_physics() {
+    bool updated = false;
 
     vec2i move = {0, 1};
     for (int i = ((grid.width * grid.height) - grid.width) - 1; i > -1; i--) {
         if (check_tile_move(grid.tiles[i], move)) {
             move_tile(&grid.tiles[i], move);
-            fall = true;
+            updated = true;
         }
     }
 
-    return fall;
-}
-
-static void update_world_physics() {
-    // anything falling? if not, check for marked tiles
-    if (!update_falling()) {
-        state.halt = false;
-        grid_scan_marked();
-
-        // tiles were removed - don't spawn player yet
-        if (state.halt) return;
-
-        spawn_player();
-        queue_enqueue();
-    }
+    return updated;
 }
 
 void stop_player() {
     set_player();
-    state.halt = true;
+    state.updating_physics = true;
     clear_player();
 
     player.active = false;
@@ -527,23 +498,41 @@ static void update_player_physics() {
     }
 }
 
-static void update_physics() {
-    if (state.halt) {
-        update_world_physics();
-    } else {
-        update_player_physics();
-    }
-}
-
 static void update_tick() {
-    if (state.halt)
+    if (state.clearing)
+        state.tick = 300;
+    else if (state.updating_physics)
         state.tick = 250;
     else
         state.tick = 1000;
 
+
     if (SDL_GetTicks() >= state.time + state.tick) {
         state.time = SDL_GetTicks();
-        update_physics();
+
+        if (!state.clearing) {
+            state.clearing = grid_scan_marked();
+            if (state.clearing) {
+                LOG("Set to clear at time: %f", state.time);
+                return;
+            }
+        }
+
+        if (state.clearing) {
+            LOG("Cleared at time: %f", state.time);
+            grid_clear_marked();
+            state.clearing = false;
+        }
+
+        if (state.updating_physics) {
+            state.updating_physics = update_world_physics();
+            if (!state.updating_physics) {
+                spawn_player();
+                queue_enqueue();
+            }
+        } else {
+            update_player_physics();
+        }
     }
 }
 
@@ -677,13 +666,6 @@ static void handle_input() {
             case SDL_QUIT:
                 state.quit = true;
                 break;
-            case SDL_MOUSEBUTTONDOWN: {
-                int tile_index = pix_pos_to_grid_index(state.mouse_pos);
-                tile_t t = grid.tiles[tile_index];
-                LOG("CLICK - tile %d info: {.letter='%c', .pos=(%d, %d), .filled=%d, .marked=%d }", tile_index, t.letter, t.pos.x, t.pos.y, t.filled, t.marked);
-                tile_set_marked(&grid.tiles[tile_index], true);
-                break;
-            }
             case SDL_MOUSEMOTION:
                 SDL_GetMouseState(&state.mouse_pos.x, &state.mouse_pos.y);
                 break;
@@ -709,7 +691,7 @@ static void handle_input() {
                     }
                     case SDLK_s:
                     case SDLK_DOWN: {
-                        if (!state.halt) {
+                        if (!state.updating_physics && !state.clearing) {
                             vec2i move = (vec2i){0, 1};
                             if (player_check_movement(move)) {
                                 state.time = SDL_GetTicks();
@@ -733,8 +715,6 @@ static void handle_input() {
                         break;
                     case SDLK_SPACE:
                         grid_clear_marked();
-                        LOG("halt=%d, clearing=%d", state.halt, state.clearing);
-                        // state.paused = !state.paused;
                         break;
                     default:
                         break;
@@ -773,7 +753,7 @@ static void queue_init() {
     LOG("Queue created");
 }
 
-int main(int argc, char *argv[]) {
+static void init_engine() {
     ASSERT(!SDL_Init(SDL_INIT_VIDEO),
            "SDL failed to initialize: %s\n", SDL_GetError());
 
@@ -799,13 +779,16 @@ int main(int argc, char *argv[]) {
                             SCREEN_HEIGHT);
 
     ASSERT(state.renderer, "Failed to create SDL Texture: %s\n", SDL_GetError());
+}
 
-
+static void init_game() {
     srand(time(NULL));
     load_sprites();
 
     state.dict_trie = trie_node_create();
     trie_construct(state.dict_trie, "./dictionary.txt");
+    state.tick = 1000;
+    state.time = SDL_GetTicks();
 
     lpool_init(&state.letter_pool);
     lpool_populate(&state.letter_pool);
@@ -814,9 +797,12 @@ int main(int argc, char *argv[]) {
     queue_init();
     spawn_player();
     queue_enqueue();
+}
 
-    state.tick = 1000.0;
-    state.time = SDL_GetTicks();
+int main(int argc, char *argv[]) {
+
+    init_engine();
+    init_game();
 
     while (!state.quit) {
         update_tick();
