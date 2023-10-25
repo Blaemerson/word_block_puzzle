@@ -65,6 +65,7 @@ char lpool_random_letter(struct LetterPool* pool) {
     while (current != NULL) {
         randomWeight -= current->weight;
         if (randomWeight < 0) {
+            ASSERT(current->letter >= 'A' && current->letter <= 'Z', "WRONG RANDOM LETTER");
             return current->letter;
         }
         current = current->next;

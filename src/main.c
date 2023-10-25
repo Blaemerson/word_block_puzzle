@@ -272,14 +272,14 @@ static bool check_word_viability(char* word) {
 static const bool check_string_validity(const char* substring) {
     const int length = strlen(substring);
 
-    if (length < 3) {
-        return false;
-    }
-
     for (int i = 0; i < length; i++) {
         if (substring[i] == ' ') {
             return false;
         }
+    }
+
+    if (length < 3) {
+        return false;
     }
 
     return true;
@@ -303,8 +303,8 @@ static bool check_substrings(const char* str, const int* position) {
                     int indexEnd = i + subLen;
 
                     for (int x = indexStart; x < indexEnd; x++) {
-                        grid.tiles[position[x]].marked = true;
                         LOG("Marked %d", position[x]);
+                        grid.tiles[position[x]].marked = true;
                     }
 
                     return true;
@@ -328,11 +328,11 @@ static bool grid_scan_hori() {
 
         // char line[grid.width];
         for (int j = 0; j < grid.width; j++) {
-            if (grid.tiles[i + j].filled && !grid.tiles[i + j].marked)
+            if (grid.tiles[i + j].filled && !grid.tiles[i + j].marked) {
                 row.letters[j] = tolower(grid.tiles[i+j].letter);
+            }
             else
                 row.letters[j] = ' ';
-
             row.indexes[j] = i + j;
         }
 
@@ -340,7 +340,7 @@ static bool grid_scan_hori() {
 
         found_word = check_substrings(row.letters, row.indexes) || found_word;
         if (found_word)
-            LOG("FOUND at row %d: '%s'", i / 8, row.letters);
+            LOG("FOUND at row %d: '%s'", i / grid.width, row.letters);
     }
 
     return found_word;
@@ -468,7 +468,7 @@ static void spawn_player() {
 
     player.active = true;
 
-    LOG("spawned player");
+    LOG("Spawned player");
 }
 
 static bool update_world_physics() {
@@ -487,8 +487,10 @@ static bool update_world_physics() {
 
 void stop_player() {
     set_player();
+    LOG("Player set");
     state.updating_physics = true;
     clear_player();
+    LOG("Cleared player");
 
     player.active = false;
 }
@@ -607,7 +609,6 @@ static void rotate_player_cw() {
 }
 
 static void rotate_player_ccw() {
-
     int t1_x = player.t1.pos.x;
     int t2_x = player.t2.pos.x;
     int t1_y = player.t1.pos.y;
@@ -647,20 +648,19 @@ static void rotate_player_ccw() {
         t2_x += 1;
     }
 
-    bool t1_check =
+    bool t1_move_failed =
         (grid.tiles[at(t1_y, t1_x, grid.width)].filled ||
         t1_x < 0 || t1_x >= grid.width);
-    bool t2_check =
+    bool t2_move_failed =
         (grid.tiles[at(t2_y, t2_x, grid.width)].filled ||
         t2_x < 0 || t2_x >= grid.width);
 
-    if (t1_check || t2_check) {
+    if (t1_move_failed || t2_move_failed) {
         return;
     }
 
     player.t1.pos = (vec2i){t1_x, t1_y};
     player.t2.pos = (vec2i){t2_x, t2_y};
-
 }
 
 static void handle_input() {
