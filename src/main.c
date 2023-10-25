@@ -336,6 +336,8 @@ static bool grid_scan_hori() {
             row.indexes[j] = i + j;
         }
 
+        row.letters[grid.width] = '\0';
+
         found_word = check_substrings(row.letters, row.indexes) || found_word;
         if (found_word)
             LOG("FOUND at row %d: '%s'", i / 8, row.letters);
@@ -363,6 +365,8 @@ static bool grid_scan_vert() {
 
             col.indexes[j] = idx;
         }
+
+        col.letters[grid.height] = '\0';
 
         found_word = check_substrings(col.letters, col.indexes) || found_word;
         if (found_word)
