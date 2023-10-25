@@ -1,15 +1,17 @@
 #include <stdio.h>
 #include <stdbool.h>
+
 #include <SDL2/SDL.h>
 #include <SDL2/SDL_image.h>
+#include <time.h>
+
 #include "../include/types.h"
 #include "../include/vec.h"
 #include "../include/sprite.h"
 #include "../include/lpool.h"
 #include "../include/trie.h"
-#include <time.h>
 #include "../include/macros.h"
-
+#include "../include/render.h"
 
 struct {
     SDL_Window *window;
@@ -19,14 +21,6 @@ struct {
     struct TrieNode *dict_trie;
     struct LetterPool letter_pool;
 
-    enum {
-        PLACE_HOLDER = 0,
-        HALT = 1 < 0,
-        PLAYING = 1 < 1,
-        QUIT = 1 < 2,
-        PAUSED = 1 < 3,
-    } game_status;
-
     vec2i mouse_pos;
     u32 pixels[SCREEN_WIDTH * SCREEN_HEIGHT];
     bool quit, halt, paused, begin, gameover, clearing;
@@ -34,72 +28,38 @@ struct {
     double tick;
 } state;
 
-typedef struct obj_s {
-    vec2i pos;
-    sprite *sprite;
-    vec2i size;
-} obj_t;
+struct {
+    uint height, width;
+    tile_t tiles[GAMEBOARD_MAX];
 
-typedef struct tile {
-    u8 letter;
-    bool filled;
-    bool marked;
-    vec2i pos;
+    obj_info_t obj;
+} grid;
 
-    obj_t obj;
-} tile_t;
+struct {
+    tile_t tiles[2];
 
+    obj_info_t obj;
+} queue;
 
 struct {
     bool active;
     tile_t t1, t2;
 } player;
 
-#define TILE_SIZE 64
-#define GAMEBOARD_WIDTH 8
-#define GAMEBOARD_HEIGHT 10
-#define GAMEBOARD_MAX (GAMEBOARD_WIDTH * GAMEBOARD_HEIGHT)
-#define GAMEBOARD_OFFSET_X (SCREEN_WIDTH / 2) - ((GAMEBOARD_WIDTH * TILE_SIZE) / 2)
-
-struct {
-    uint height, width;
-    tile_t tiles[GAMEBOARD_MAX];
-
-    obj_t obj;
-} grid;
-
-struct {
-    tile_t tiles[2];
-
-    obj_t obj;
-} queue;
-
-
-static void obj_render(obj_t *obj) {
-    SDL_UpdateTexture(state.texture, &(SDL_Rect){.x=obj->pos.x, .y=obj->pos.y, .w=obj->size.x, .h=obj->size.y}, obj->sprite->pixels, obj->size.x * 4);
-}
-
-static void sprite_render(int x, int y, sprite *s) {
-    SDL_UpdateTexture(state.texture, &(SDL_Rect){.x=x, .y=y, .w=s->width, .h=s->height}, s->pixels, s->width * 4);
-}
-
-static void pix_buf_render(int x, int y, int w, int h, u32 *pixels) {
-    SDL_UpdateTexture(state.texture, &(SDL_Rect){.x=x, .y=y, .w=w, .h=h}, pixels, w * 4);
-}
 
 static void queue_render() {
     u32 x = queue.obj.pos.x;
     u32 y = queue.obj.pos.y;
 
     // border
-    sprite_render(x, y, queue.obj.sprite);
+    sprite_render(x, y, queue.obj.sprite, state.texture);
 
     // tiles
     int gap_x = queue.tiles[0].obj.size.x / 2;
     int gap_y = queue.tiles[0].obj.size.y / 2;
 
-    sprite_render(x + gap_x, y + gap_y, queue.tiles[0].obj.sprite);
-    sprite_render(x + gap_x * 3, y + gap_y, queue.tiles[1].obj.sprite);
+    sprite_render(x + gap_x, y + gap_y, queue.tiles[0].obj.sprite, state.texture);
+    sprite_render(x + gap_x * 3, y + gap_y, queue.tiles[1].obj.sprite, state.texture);
 }
 
 
@@ -123,26 +83,10 @@ static void grid_clear() {
  DRAWING
 
 */
-static void clear_scr() {
+static void clear_pixel_buf(u32 *pix, usize size) {
     for (int i = 0; i < SCREEN_WIDTH * SCREEN_HEIGHT; i++) {
-        state.pixels[i] = 0x555555FF;
+        state.pixels[i] = 0x00000000;
     }
-}
-
-static void verline(int x, int y0, int y1, u32 color) {
-    for (int y = y0; y <= y1; y++)
-        state.pixels[at(y, x, SCREEN_WIDTH)] = color;
-}
-
-static void horiline(int x0, int x1, int y, u32 color) {
-    for (int x = x0; x <= x1; x++)
-        state.pixels[at(y, x, SCREEN_WIDTH)] = color;
-}
-
-static u32 * clone_pixels(u32 const * src, size_t len) {
-   u32 *p = malloc(len * sizeof(u32));
-   memcpy(p, src, len * sizeof(u32));
-   return p;
 }
 
 static void draw_tile(tile_t t) {
@@ -155,9 +99,9 @@ static void draw_tile(tile_t t) {
             pixels[i] |= 0xFFCCCC99;
         }
 
-        pix_buf_render(x, y, t.obj.sprite->width, t.obj.sprite->height, pixels);
+        pix_buf_render(x, y, t.obj.sprite->width, t.obj.sprite->height, pixels, state.texture);
     } else {
-        sprite_render(x, y, t.obj.sprite);
+        sprite_render(x, y, t.obj.sprite, state.texture);
     }
 }
 
@@ -178,12 +122,17 @@ static void draw_bg() {
 static void draw_grid() {
     u32 line_color = 0xBBBBBBBB;
 
+    int x = grid.obj.pos.x;
+    int y = grid.obj.pos.y;
+
+    LOG("verlines");
     for (int i = 0; i < (grid.width * TILE_SIZE) + 1; i += TILE_SIZE) {
-        verline(i + grid.obj.pos.x, grid.obj.pos.y, grid.height * TILE_SIZE + grid.obj.pos.y, line_color);
+        verline(i + x, y, grid.height * TILE_SIZE + y, line_color, state.pixels, SCREEN_WIDTH);
     }
 
-    for (int i = grid.obj.pos.y; i < (grid.height * TILE_SIZE) + 1 + grid.obj.pos.y; i += TILE_SIZE) {
-        horiline(grid.obj.pos.x, (grid.width * TILE_SIZE) + grid.obj.pos.x, i, line_color);
+    LOG("verlines");
+    for (int i = y; i < (grid.height * TILE_SIZE) + 1 + y; i += TILE_SIZE) {
+        horiline(x, (grid.width * TILE_SIZE) + x, i, line_color, state.pixels, SCREEN_WIDTH);
     }
 }
 
@@ -225,14 +174,22 @@ static void set_player() {
 // }
 
 static void render() {
-    clear_scr();
+    LOG("1");
+    clear_pixel_buf(state.pixels, SCREEN_WIDTH * SCREEN_HEIGHT);
+    LOG("2");
     draw_bg();
+    LOG("3");
     draw_grid();
 
+    LOG("4");
     SDL_UpdateTexture(state.texture, NULL, state.pixels, SCREEN_WIDTH * 4);
+    LOG("5");
 
+    LOG("6");
     draw_tiles();
+    LOG("7");
 
+    LOG("8");
     queue_render();
 
     if (player.active) draw_player();
@@ -293,10 +250,13 @@ static bool check_word_viability(char* word) {
     bool contains_consonant = false;
 
     for (int i = 0; i < strlen(word); i++) {
-        if (word[i] == 'a' || word[i] == 'e' || word[i] == 'i' || word[i] == 'o' || word[i] == 'u') {
-            contains_vowel = true;
-        } else {
-            contains_consonant = true;
+        switch(word[i]) {
+            case 'a': case 'e': case 'i': case 'o': case 'u':
+                contains_vowel = true;
+                break;
+            default:
+                contains_consonant = true;
+                break;
         }
     }
 
@@ -366,7 +326,7 @@ static bool grid_scan_hori() {
                 row.letters[j] = tolower(grid.tiles[i+j].letter);
             else
                 row.letters[j] = ' ';
-            
+
             row.indexes[j] = i + j;
         }
 
@@ -491,7 +451,7 @@ static tile_t *tile_create(u8 letter, bool filled, bool marked, uint x, uint y, 
         .marked = marked,
         .pos = {x, y},
 
-        .obj = (obj_t){
+        .obj = (obj_info_t){
             .sprite = &sprites[letter - 'A'],
             .pos = {x * w + grid.obj.pos.x, y * h + grid.obj.pos.y},
             .size = {w, h},
@@ -507,6 +467,7 @@ static void queue_enqueue() {
     // queue.tiles[1] = new_tile(true, t2_letter, t2_pos);
     queue.tiles[0] = *tile_create(lpool_random_letter(&state.letter_pool), true, false, -1, -1, 64, 64);
     queue.tiles[1] = *tile_create(lpool_random_letter(&state.letter_pool), true, false, -1, -1, 64, 64);
+    LOG("Enqueued two tiles");
 }
 
 static void spawn_player() {
@@ -517,6 +478,8 @@ static void spawn_player() {
     player.t2.pos = (vec2i){(grid.width / 2), 0};
 
     player.active = true;
+
+    LOG("spawned player");
 }
 
 static bool update_falling() {
@@ -595,43 +558,115 @@ void tile_set_marked(tile_t *t, bool marked) {
 }
 
 static void rotate_player_cw() {
-    if (player.t1.pos.x < player.t2.pos.x) {
+    int t1_x = player.t1.pos.x;
+    int t2_x = player.t2.pos.x;
+    int t1_y = player.t1.pos.y;
+    int t2_y = player.t2.pos.y;
+
+    if (t1_x < t2_x) {
         LOG("cw rotation 1");
-        player.t1.pos.y -= 1;
-        player.t2.pos.x -= 1;
-    } else if (player.t1.pos.x == player.t2.pos.x && player.t1.pos.y < player.t2.pos.y) {
+        t1_y -= 1;
+        t2_x -= 1;
+    } else if (t1_x == t2_x && t1_y < t2_y) {
         LOG("cw rotation 2");
-        player.t1.pos.y += 1;
-        player.t1.pos.x += 1;
-    } else if (player.t1.pos.x > player.t2.pos.x && player.t1.pos.y == player.t2.pos.y) {
+        t1_y += 1;
+        t1_x += 1;
+    } else if (t1_x > t2_x && t1_y == t2_y) {
         LOG("cw rotation 3");
-        player.t1.pos.x -= 1;
-        player.t2.pos.y -= 1;
+        t1_x -= 1;
+        t2_y -= 1;
     } else {
         LOG("cw rotation 4");
-        player.t2.pos.x += 1;
-        player.t2.pos.y += 1;
+        t2_x += 1;
+        t2_y += 1;
     }
+
+    if (t1_y < 0 || t2_y < 0) {
+        return;
+    }
+
+    bool kick_check =
+        (grid.tiles[at(t2_y, t2_x, grid.width)].filled &&
+        !grid.tiles[at(t2_y, t2_x - 1, grid.width)].filled) || (t1_x >= grid.width) || (t2_x >= grid.width) ||
+        (grid.tiles[at(t1_y, t1_x, grid.width)].filled &&
+        !grid.tiles[at(t1_y, t1_x - 1, grid.width)].filled);
+
+    if (kick_check) {
+        LOG("kick left");
+        t1_x -= 1;
+        t2_x -= 1;
+    }
+
+
+    bool t1_check =
+        (grid.tiles[at(t1_y, t1_x, grid.width)].filled ||
+        t1_x < 0 || t1_x >= grid.width);
+    bool t2_check =
+        (grid.tiles[at(t2_y, t2_x, grid.width)].filled ||
+        t2_x < 0 || t2_x >= grid.width);
+
+    if (t1_check || t2_check) {
+        return;
+    }
+
+    player.t1.pos = (vec2i){t1_x, t1_y};
+    player.t2.pos = (vec2i){t2_x, t2_y};
 }
 
 static void rotate_player_ccw() {
-    if (player.t1.pos.x < player.t2.pos.x) {
+
+    int t1_x = player.t1.pos.x;
+    int t2_x = player.t2.pos.x;
+    int t1_y = player.t1.pos.y;
+    int t2_y = player.t2.pos.y;
+
+    if (t1_x < t2_x) {
         LOG("ccw rotation 1");
-        player.t1.pos.x += 1;
-        player.t2.pos.y -= 1;
-    } else if (player.t1.pos.x == player.t2.pos.x && player.t1.pos.y > player.t2.pos.y) {
+        t1_x += 1;
+        t2_y -= 1;
+    } else if (t1_x == t2_x && t1_y > t2_y) {
         LOG("ccw rotation 2");
-        player.t2.pos.x -= 1;
-        player.t2.pos.y += 1;
-    } else if (player.t1.pos.x > player.t2.pos.x && player.t1.pos.y == player.t2.pos.y) {
+        t2_x -= 1;
+        t2_y += 1;
+    } else if (t1_x > t2_x && t1_y == t2_y) {
         LOG("ccw rotation 3");
-        player.t2.pos.x += 1;
-        player.t1.pos.y -= 1;
+        t2_x += 1;
+        t1_y -= 1;
     } else {
         LOG("ccw rotation 4");
-        player.t1.pos.y += 1;
-        player.t1.pos.x -= 1;
+        t1_y += 1;
+        t1_x -= 1;
     }
+
+    if (t1_y < 0 || t2_y < 0) {
+        return;
+    }
+
+    bool kick_check =
+        (grid.tiles[at(t2_y, t2_x, grid.width)].filled &&
+        !grid.tiles[at(t2_y, t2_x + 1, grid.width)].filled) || (t1_x < 0) || (t2_x < 0) ||
+        (grid.tiles[at(t1_y, t1_x, grid.width)].filled &&
+        !grid.tiles[at(t1_y, t1_x + 1, grid.width)].filled);
+
+    if (kick_check) {
+        LOG("kick right");
+        t1_x += 1;
+        t2_x += 1;
+    }
+
+    bool t1_check =
+        (grid.tiles[at(t1_y, t1_x, grid.width)].filled ||
+        t1_x < 0 || t1_x >= grid.width);
+    bool t2_check =
+        (grid.tiles[at(t2_y, t2_x, grid.width)].filled ||
+        t2_x < 0 || t2_x >= grid.width);
+
+    if (t1_check || t2_check) {
+        return;
+    }
+
+    player.t1.pos = (vec2i){t1_x, t1_y};
+    player.t2.pos = (vec2i){t2_x, t2_y};
 
 }
 
@@ -697,7 +732,7 @@ static void handle_input() {
                         flip_player();
                         break;
                     case SDLK_SPACE:
-                        // grid_clear();
+                        grid_clear_marked();
                         LOG("halt=%d, clearing=%d", state.halt, state.clearing);
                         // state.paused = !state.paused;
                         break;
@@ -715,7 +750,7 @@ static void grid_init(int cols, int rows) {
 
     grid.width = cols;
     grid.height = rows;
-    grid.obj = (obj_t){
+    grid.obj = (obj_info_t){
         .pos = {grid_x, grid_y},
         .sprite = &((sprite){}),
         .size = {cols * TILE_SIZE, rows * TILE_SIZE},
@@ -729,7 +764,7 @@ static void queue_init() {
     int w = 64 * 3;
     int h = 64 * 2;
 
-    queue.obj = (obj_t){
+    queue.obj = (obj_info_t){
         .size = {w, h},
         .pos = {x, y},
         .sprite = &sprites[26],
@@ -742,22 +777,19 @@ int main(int argc, char *argv[]) {
     ASSERT(!SDL_Init(SDL_INIT_VIDEO),
            "SDL failed to initialize: %s\n", SDL_GetError());
 
-    state.window
-        = SDL_CreateWindow(
-            "Wordtris",
-            SDL_WINDOWPOS_CENTERED_DISPLAY(1),
-            SDL_WINDOWPOS_CENTERED_DISPLAY(1),
-            SCREEN_WIDTH, SCREEN_HEIGHT,
-            SDL_WINDOW_ALLOW_HIGHDPI);
+    state.window =
+        SDL_CreateWindow("Wordtris",
+                         SDL_WINDOWPOS_CENTERED_DISPLAY(1),
+                         SDL_WINDOWPOS_CENTERED_DISPLAY(1),
+                         SCREEN_WIDTH, SCREEN_HEIGHT,
+                         SDL_WINDOW_ALLOW_HIGHDPI);
 
-    ASSERT(state.window,
-           "Failed to create SDL Window: %s\n", SDL_GetError());
+    ASSERT(state.window, "Failed to create SDL Window: %s\n", SDL_GetError());
 
-    state.renderer
-        = SDL_CreateRenderer(state.window, -1, SDL_RENDERER_PRESENTVSYNC);
+    state.renderer =
+        SDL_CreateRenderer(state.window, -1, SDL_RENDERER_PRESENTVSYNC);
 
-    ASSERT(state.renderer,
-           "Failed to create SDL Renderer: %s\n", SDL_GetError());
+    ASSERT(state.renderer, "Failed to create SDL Renderer: %s\n", SDL_GetError());
 
     state.texture
         = SDL_CreateTexture(state.renderer,
@@ -766,8 +798,7 @@ int main(int argc, char *argv[]) {
                             SCREEN_WIDTH,
                             SCREEN_HEIGHT);
 
-    ASSERT(state.renderer,
-           "Failed to create SDL Texture: %s\n", SDL_GetError());
+    ASSERT(state.renderer, "Failed to create SDL Texture: %s\n", SDL_GetError());
 
 
     srand(time(NULL));
@@ -794,6 +825,9 @@ int main(int argc, char *argv[]) {
 
         render();
     }
+
+    lpool_destroy(&state.letter_pool);
+    trie_destroy(state.dict_trie);
 
     SDL_DestroyTexture(state.texture);
 
