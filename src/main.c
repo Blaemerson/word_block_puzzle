@@ -24,7 +24,7 @@ struct {
 
     vec2i mouse_pos;
     u32 pixels[SCREEN_WIDTH * SCREEN_HEIGHT];
-    bool quit, updating_physics, paused, begin, gameover, clearing;
+    bool quit, halt, paused, begin, gameover, clearing;
     double time;
     double tick;
 } state;
@@ -41,7 +41,6 @@ struct {
 
     obj_info_t obj;
 } queue;
-
 
 typedef enum {
     CLOCKWISE,
@@ -61,6 +60,37 @@ struct {
     tile_t t1, t2;
 } player;
 
+
+u32 *load_img_pixels(const char *file) {
+    SDL_Surface *surface = IMG_Load(file);
+    u32 *pixels;
+    if (surface) {
+        LOG("Loading %s", file);
+        pixels = surface->pixels;
+        SDL_FreeSurface(surface);
+    }
+    return pixels;
+}
+
+static const char* letter_textures[] = {
+    "gfx/TileA.png", "gfx/TileB.png", "gfx/TileC.png", "gfx/TileD.png",
+    "gfx/TileE.png", "gfx/TileF.png", "gfx/TileG.png", "gfx/TileH.png",
+    "gfx/TileI.png", "gfx/TileJ.png", "gfx/TileK.png", "gfx/TileL.png",
+    "gfx/TileM.png", "gfx/TileN.png", "gfx/TileO.png", "gfx/TileP.png",
+    "gfx/TileQ.png", "gfx/TileR.png", "gfx/TileS.png", "gfx/TileT.png",
+    "gfx/TileU.png", "gfx/TileV.png", "gfx/TileW.png", "gfx/TileX.png",
+    "gfx/TileY.png", "gfx/TileZ.png",
+};
+
+static sprite sprites[27];
+
+static void load_sprites() {
+    for (int i = 0; i < 26; i++) {
+        sprites[i] = sprite_create_from(64, 64, load_img_pixels(letter_textures[i]));
+    }
+    LOG("Create sprite");
+    sprites[26] = sprite_create_from(64 * 3, 64 * 2, load_img_pixels("gfx/QueueBorder.png"));
+}
 
 static void queue_render() {
     u32 x = queue.obj.pos.x;
@@ -104,6 +134,32 @@ static void grid_clear() {
         grid.tiles[i] = *default_tile();
 }
 
+static tile_t *grey_tile(int x, int y) {
+    IFDEBUG_LOG("Created default tile");
+    char letter = lpool_random_letter(&state.letter_pool) ;
+    return &(tile_t){
+        .letter=letter,
+        .marked=false,
+        .filled=true,
+        .stuck=true,
+        .connected=CON_NONE,
+        .pos={x, y},
+        .obj=(obj_info_t){
+            .size={64, 64},
+            .pos = {x * TILE_SIZE + grid.obj.pos.x, y * TILE_SIZE + grid.obj.pos.y},
+            .sprite=&sprites[letter - 'A'],
+        },
+    };
+}
+
+static void grid_randomize_grey_tiles() {
+    for (int i = 0; i < grid.width * grid.height; i++) {
+        if (i > rand() % 240) {
+            grid.tiles[i] = *grey_tile(i % grid.width, i / grid.width);
+        }
+    }
+}
+
 
 /*
  
@@ -127,6 +183,16 @@ static void draw_tile(tile_t t) {
         }
 
         pix_buf_render(x, y, t.obj.sprite->width, t.obj.sprite->height, pixels, state.texture);
+    }
+    else if (t.stuck) {
+        u32 *pixels = clone_pixels(t.obj.sprite->pixels, t.obj.sprite->width * t.obj.sprite->height);
+
+        for (int i = 0; i < t.obj.sprite->width * t.obj.sprite->height; i++) {
+            pixels[i] ^= 0xFFCCCC99;
+        }
+
+        pix_buf_render(x, y, t.obj.sprite->width, t.obj.sprite->height, pixels, state.texture);
+
     } else {
         sprite_render(x, y, t.obj.sprite, state.texture);
     }
@@ -293,7 +359,7 @@ static const bool check_string_validity(const char* substring) {
 
 
 // check for words in a given row of characters
-static bool check_substrings(const char* str, const int* position) {
+static bool check_substrings(const char* str, uint* indices) {
     int len = strlen(str);
     int maxLen = len < grid.height ? len : grid.height;
 
@@ -310,8 +376,8 @@ static bool check_substrings(const char* str, const int* position) {
                     int indexEnd = i + subLen;
 
                     for (int x = indexStart; x < indexEnd; x++) {
-                        IFDEBUG_LOG("Marked %d", position[x]);
-                        grid.tiles[position[x]].marked = true;
+                        IFDEBUG_LOG("Marked %d", indices[x]);
+                        grid.tiles[indices[x]].marked = true;
                     }
                     IFDEBUG_LOG("WORD FOUND: %s", substr);
 
@@ -330,24 +396,29 @@ static bool grid_scan_hori() {
     // Horizontal check
     for (int i = 0; i < grid.height * grid.width; i += grid.width) {
         struct {
-            char letters[8];
-            int indexes[8];
+            char *letters;
+            uint *indices;
         } row;
+
+        row.letters = malloc(grid.width * sizeof(char));
+        row.indices = malloc(grid.width * sizeof(uint));
 
         row.letters[grid.width] = '\0';
 
-        // char line[grid.width];
+        // collect row letters along with their index in the game board
         for (int j = 0; j < grid.width; j++) {
-            if (grid.tiles[i + j].filled && !grid.tiles[i + j].marked) {
+            if (grid.tiles[i + j].filled) {
                 row.letters[j] = tolower(grid.tiles[i+j].letter);
             }
             else {
                 row.letters[j] = ' ';
             }
-            row.indexes[j] = i + j;
+            row.indices[j] = i + j;
         }
+        found_word = check_substrings(row.letters, row.indices) || found_word;
 
-        found_word = check_substrings(row.letters, row.indexes) || found_word;
+        free(row.letters);
+        free(row.indices);
     }
 
     return found_word;
@@ -358,24 +429,31 @@ static bool grid_scan_vert() {
     // Vertical check
     for (int i = 0; i < grid.width; i += 1) {
         struct {
-            char letters[10];
-            int indexes[10];
+            char *letters;
+            uint *indices;
         } col;
+
+        col.letters = malloc(grid.height * sizeof(char));
+        col.indices = malloc(grid.height * sizeof(uint));
+
         col.letters[grid.height] = '\0';
 
         for (int j = 0; j < grid.height; j += 1) {
             int idx = j * grid.width + i;
 
-            if (grid.tiles[idx].filled && !grid.tiles[idx].marked)
+            if (grid.tiles[idx].filled)
                 col.letters[j] = tolower(grid.tiles[idx].letter);
             else
                 col.letters[j] = ' ';
 
-            col.indexes[j] = idx;
+            col.indices[j] = idx;
         }
 
 
-        found_word = check_substrings(col.letters, col.indexes) || found_word;
+        found_word = check_substrings(col.letters, col.indices) || found_word;
+
+        free(col.letters);
+        free(col.indices);
     }
 
     return found_word;
@@ -387,15 +465,6 @@ static bool grid_clear_marked() {
     for (int i = 0; i < grid.width * grid.height; i++) {
         if (grid.tiles[i].marked) {
             cleared = true;
-            if (grid.tiles[i].connected == CON_LEFT) {
-                grid.tiles[i-1].connected = CON_NONE;
-            } else if (grid.tiles[i].connected == CON_RIGHT) {
-                grid.tiles[i+1].connected = CON_NONE;
-            } else if (grid.tiles[i].connected == CON_UP) {
-                grid.tiles[i-grid.width].connected = CON_NONE;
-            } else if (grid.tiles[i].connected == CON_DOWN) {
-                grid.tiles[i+grid.width].connected = CON_NONE;
-            }
             grid.tiles[i] = *default_tile();
         }
     }
@@ -406,7 +475,9 @@ static bool grid_clear_marked() {
 static bool grid_scan_marked() {
     bool marked = false;
 
+    LOG("before grid_hori");
     marked = grid_scan_hori();
+    LOG("before grid_vert");
     marked = marked || grid_scan_vert();
 
     LOG("Scanning... clearing should be %d", marked);
@@ -414,38 +485,6 @@ static bool grid_scan_marked() {
     return marked;
 }
 
-
-u32 *load_img_pixels(const char *file) {
-    SDL_Surface *surface = IMG_Load(file);
-    u32 *pixels;
-    if (surface) {
-        LOG("Loading %s", file);
-        pixels = surface->pixels;
-        SDL_FreeSurface(surface);
-    }
-    return pixels;
-}
-
-
-static const char* letter_textures[] = {
-    "gfx/TileA.png", "gfx/TileB.png", "gfx/TileC.png", "gfx/TileD.png",
-    "gfx/TileE.png", "gfx/TileF.png", "gfx/TileG.png", "gfx/TileH.png",
-    "gfx/TileI.png", "gfx/TileJ.png", "gfx/TileK.png", "gfx/TileL.png",
-    "gfx/TileM.png", "gfx/TileN.png", "gfx/TileO.png", "gfx/TileP.png",
-    "gfx/TileQ.png", "gfx/TileR.png", "gfx/TileS.png", "gfx/TileT.png",
-    "gfx/TileU.png", "gfx/TileV.png", "gfx/TileW.png", "gfx/TileX.png",
-    "gfx/TileY.png", "gfx/TileZ.png",
-};
-
-static sprite sprites[27];
-
-static void load_sprites() {
-    for (int i = 0; i < 26; i++) {
-        sprites[i] = sprite_create_from(64, 64, load_img_pixels(letter_textures[i]));
-    }
-    LOG("Create sprite");
-    sprites[26] = sprite_create_from(64 * 3, 64 * 2, load_img_pixels("gfx/QueueBorder.png"));
-}
 
 static tile_t *tile_create(u8 letter, bool filled, bool marked, uint x, uint y) {
     tile_t *t = &(tile_t){
@@ -500,11 +539,11 @@ static void update_tile_connections() {
                         grid.tiles[i].connected = CON_NONE;
                     break;
                 case(CON_UP):
-                    if (grid.tiles[i - grid.width].connected != CON_LEFT || !grid.tiles[i - grid.width].filled)
+                    if (grid.tiles[i - grid.width].connected != CON_DOWN || !grid.tiles[i - grid.width].filled)
                         grid.tiles[i].connected = CON_NONE;
                     break;
                 case(CON_DOWN):
-                    if (grid.tiles[i + grid.width].connected != CON_LEFT || !grid.tiles[i + grid.width].filled)
+                    if (grid.tiles[i + grid.width].connected != CON_UP || !grid.tiles[i + grid.width].filled)
                         grid.tiles[i].connected = CON_NONE;
                     break;
                 default:
@@ -519,6 +558,9 @@ static bool update_world_physics() {
 
     vec2i move = {0, 1};
     for (int i = ((grid.width * grid.height) - grid.width) - 1; i > -1; i--) {
+        if (grid.tiles[i].stuck) {
+            continue;
+        }
         switch(grid.tiles[i].connected) {
             case (CON_LEFT):
                 ASSERT(i % grid.width > 0, "Impossible, tile cannot be connected to the left" );
@@ -549,7 +591,7 @@ static bool update_world_physics() {
 void stop_player() {
     set_player();
     LOG("Player set");
-    state.updating_physics = true;
+    state.halt = true;
     clear_player();
     LOG("Cleared player");
 
@@ -566,36 +608,34 @@ static void update_player_physics() {
 }
 
 static void update_tick() {
-    if (state.clearing)
-        state.tick = 400;
-    else if (state.updating_physics)
+    // varying tick speeds --> larger = slower
+    if (state.halt)
         state.tick = 250;
+    else if (state.clearing)
+        state.tick = 400;
     else
         state.tick = 1000;
-
 
     if (SDL_GetTicks() >= state.time + state.tick) {
         state.time = SDL_GetTicks();
 
-        update_tile_connections();
-
+        // Scan for words only if not already scanned
         if (!state.clearing) {
-            state.clearing = grid_scan_marked();
-            if (state.clearing) {
-                LOG("Set to clear at time: %f", state.time);
+            if (grid_scan_marked()) {
+                state.clearing = true;
                 return;
             }
-        }
-
-        if (state.clearing) {
-            LOG("Cleared at time: %f", state.time);
+        } else {
+            // Clear the board of marked files
             grid_clear_marked();
+            update_tile_connections();
             state.clearing = false;
         }
 
-        if (state.updating_physics) {
-            state.updating_physics = update_world_physics();
-            if (!state.updating_physics) {
+        // TODO: don't clear words that are falling
+        if (state.halt) {
+            state.halt = update_world_physics();
+            if (!state.halt) {
                 spawn_player();
                 queue_enqueue();
             }
@@ -798,7 +838,7 @@ static void handle_input() {
                     }
                     case SDLK_s:
                     case SDLK_DOWN: {
-                        if (!state.updating_physics && !state.clearing) {
+                        if (!state.halt && !state.clearing) {
                             vec2i move = (vec2i){0, 1};
                             if (player_check_movement(move)) {
                                 state.time = SDL_GetTicks();
@@ -901,6 +941,7 @@ static void init_game() {
     lpool_populate(&state.letter_pool);
 
     grid_init(8, 10);
+    // grid_randomize_grey_tiles();
     queue_init();
     spawn_player();
     queue_enqueue();

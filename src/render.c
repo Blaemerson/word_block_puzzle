@@ -27,6 +27,16 @@ void verline(int x, int y0, int y1, u32 color, u32* pixels, int pix_buf_width) {
         pixels[(y * pix_buf_width) + x] = color;
 }
 
+u32* line(int length, u32 color) {
+    u32 *pixels = malloc(sizeof(u32) * length);
+
+    for (int i = 0; i < length; i++) {
+        pixels[i] = color;
+    }
+
+    return pixels;
+}
+
 void horiline(int x0, int x1, int y, u32 color, u32* pixels, int pix_buf_width) {
     for (int x = x0; x <= x1; x++)
         pixels[(y * pix_buf_width) + x] = color;

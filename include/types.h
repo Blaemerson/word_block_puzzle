@@ -34,6 +34,7 @@ typedef struct obj_s {
 typedef struct tile {
     u8 letter;
     bool filled;
+    bool stuck;
     bool marked;
     vec2i pos;
 
