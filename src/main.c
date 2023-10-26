@@ -87,9 +87,21 @@ static u32 at(uint x, uint y, u32 width) {
     return (x * width) + y;
 }
 
+static tile_t *default_tile() {
+    IFDEBUG_LOG("Created default tile");
+    return &(tile_t){
+        .letter='\0',
+        .marked=false,
+        .filled=false,
+        .connected=CON_NONE,
+        .pos={-1, -1},
+        .obj={},
+    };
+}
+
 static void grid_clear() {
     for (int i = 0; i < grid.width * grid.height; i++)
-        grid.tiles[i] = (tile_t){.letter=' '};
+        grid.tiles[i] = *default_tile();
 }
 
 
@@ -171,7 +183,7 @@ static void draw_player() {
 static void set_player() {
     grid.tiles[(player.t1.pos.y * GAMEBOARD_WIDTH) + player.t1.pos.x] = player.t1;
     grid.tiles[(player.t2.pos.y * GAMEBOARD_WIDTH) + player.t2.pos.x] = player.t2;
-    LOG( "Set tiles at (%d, %d) and (%d, %d) : (%c %c)",
+    IFDEBUG_LOG( "Set tiles at (%d, %d) and (%d, %d) : (%c %c)",
         player.t1.pos.x,
         player.t1.pos.y,
         player.t2.pos.x,
@@ -179,12 +191,6 @@ static void set_player() {
         player.t1.letter,
         player.t2.letter);
 }
-
-
-
-// static tile_t new_tile(bool filled, char letter, vec2i pos) {
-//     return (tile_t){.filled=filled, .letter=letter, .pos=pos, .size=64};
-// }
 
 static void render() {
     clear_pixel_buf(state.pixels, SCREEN_WIDTH * SCREEN_HEIGHT);
@@ -245,8 +251,8 @@ static void move_player(vec2i move) {
 
 
 static void clear_player() {
-    player.t1 = (tile_t){.letter = ' '};
-    player.t2 = (tile_t){.letter = ' '};
+    player.t1 = *default_tile();
+    player.t2 = *default_tile();
 }
 
 // word is viable if it contains and vowel and a consonant
@@ -297,15 +303,17 @@ static bool check_substrings(const char* str, const int* position) {
             strncpy(substr, str + i, subLen);
             substr[subLen] = '\0';
 
+
             if (check_word_viability(substr) && check_string_validity(substr)) {
                 if (trie_search_word(state.dict_trie, substr)) {
                     int indexStart = i;
                     int indexEnd = i + subLen;
 
                     for (int x = indexStart; x < indexEnd; x++) {
-                        LOG("Marked %d", position[x]);
+                        IFDEBUG_LOG("Marked %d", position[x]);
                         grid.tiles[position[x]].marked = true;
                     }
+                    IFDEBUG_LOG("WORD FOUND: %s", substr);
 
                     return true;
                 }
@@ -326,21 +334,20 @@ static bool grid_scan_hori() {
             int indexes[8];
         } row;
 
+        row.letters[grid.width] = '\0';
+
         // char line[grid.width];
         for (int j = 0; j < grid.width; j++) {
             if (grid.tiles[i + j].filled && !grid.tiles[i + j].marked) {
                 row.letters[j] = tolower(grid.tiles[i+j].letter);
             }
-            else
+            else {
                 row.letters[j] = ' ';
+            }
             row.indexes[j] = i + j;
         }
 
-        row.letters[grid.width] = '\0';
-
         found_word = check_substrings(row.letters, row.indexes) || found_word;
-        if (found_word)
-            LOG("FOUND at row %d: '%s'", i / grid.width, row.letters);
     }
 
     return found_word;
@@ -354,6 +361,7 @@ static bool grid_scan_vert() {
             char letters[10];
             int indexes[10];
         } col;
+        col.letters[grid.height] = '\0';
 
         for (int j = 0; j < grid.height; j += 1) {
             int idx = j * grid.width + i;
@@ -366,11 +374,8 @@ static bool grid_scan_vert() {
             col.indexes[j] = idx;
         }
 
-        col.letters[grid.height] = '\0';
 
         found_word = check_substrings(col.letters, col.indexes) || found_word;
-        if (found_word)
-            LOG("FOUND in col %d: '%s'", i, col.letters);
     }
 
     return found_word;
@@ -382,7 +387,16 @@ static bool grid_clear_marked() {
     for (int i = 0; i < grid.width * grid.height; i++) {
         if (grid.tiles[i].marked) {
             cleared = true;
-            grid.tiles[i] = (tile_t){.letter = ' '};
+            if (grid.tiles[i].connected == CON_LEFT) {
+                grid.tiles[i-1].connected = CON_NONE;
+            } else if (grid.tiles[i].connected == CON_RIGHT) {
+                grid.tiles[i+1].connected = CON_NONE;
+            } else if (grid.tiles[i].connected == CON_UP) {
+                grid.tiles[i-grid.width].connected = CON_NONE;
+            } else if (grid.tiles[i].connected == CON_DOWN) {
+                grid.tiles[i+grid.width].connected = CON_NONE;
+            }
+            grid.tiles[i] = *default_tile();
         }
     }
 
@@ -401,8 +415,7 @@ static bool grid_scan_marked() {
 }
 
 
-u32 *load_img_pixels(const char *file)
-{
+u32 *load_img_pixels(const char *file) {
     SDL_Surface *surface = IMG_Load(file);
     u32 *pixels;
     if (surface) {
@@ -468,7 +481,37 @@ static void spawn_player() {
 
     player.active = true;
 
+    player.t1.connected=CON_RIGHT;
+    player.t2.connected=CON_LEFT;
+
     LOG("Spawned player");
+}
+
+static void update_tile_connections() {
+    for (int i = 0; i < grid.width * grid.height; i++) {
+        if (grid.tiles[i].filled) {
+            switch(grid.tiles[i].connected) {
+                case(CON_LEFT):
+                    if (grid.tiles[i - 1].connected != CON_RIGHT || !grid.tiles[i - 1].filled)
+                        grid.tiles[i].connected = CON_NONE;
+                    break;
+                case(CON_RIGHT):
+                    if (grid.tiles[i + 1].connected != CON_LEFT || !grid.tiles[i + 1].filled)
+                        grid.tiles[i].connected = CON_NONE;
+                    break;
+                case(CON_UP):
+                    if (grid.tiles[i - grid.width].connected != CON_LEFT || !grid.tiles[i - grid.width].filled)
+                        grid.tiles[i].connected = CON_NONE;
+                    break;
+                case(CON_DOWN):
+                    if (grid.tiles[i + grid.width].connected != CON_LEFT || !grid.tiles[i + grid.width].filled)
+                        grid.tiles[i].connected = CON_NONE;
+                    break;
+                default:
+                    break;
+            }
+        }
+    }
 }
 
 static bool update_world_physics() {
@@ -476,9 +519,27 @@ static bool update_world_physics() {
 
     vec2i move = {0, 1};
     for (int i = ((grid.width * grid.height) - grid.width) - 1; i > -1; i--) {
-        if (check_tile_move(grid.tiles[i], move)) {
-            move_tile(&grid.tiles[i], move);
-            updated = true;
+        switch(grid.tiles[i].connected) {
+            case (CON_LEFT):
+                ASSERT(i % grid.width > 0, "Impossible, tile cannot be connected to the left" );
+                if (check_tile_move(grid.tiles[i - 1], move) && check_tile_move(grid.tiles[i], move)) {
+                    move_tile(&grid.tiles[i], move);
+                    updated = true;
+                }
+                break;
+            case (CON_RIGHT):
+                ASSERT(i % grid.width < grid.width - 1, "Impossible, tile cannot be connected to the right" );
+                if (check_tile_move(grid.tiles[i + 1], move) && check_tile_move(grid.tiles[i], move)) {
+                    move_tile(&grid.tiles[i], move);
+                    updated = true;
+                }
+                break;
+            default:
+                if (check_tile_move(grid.tiles[i], move)) {
+                    move_tile(&grid.tiles[i], move);
+                    updated = true;
+                }
+                break;
         }
     }
 
@@ -506,7 +567,7 @@ static void update_player_physics() {
 
 static void update_tick() {
     if (state.clearing)
-        state.tick = 300;
+        state.tick = 400;
     else if (state.updating_physics)
         state.tick = 250;
     else
@@ -515,6 +576,8 @@ static void update_tick() {
 
     if (SDL_GetTicks() >= state.time + state.tick) {
         state.time = SDL_GetTicks();
+
+        update_tile_connections();
 
         if (!state.clearing) {
             state.clearing = grid_scan_marked();
@@ -558,22 +621,33 @@ static void rotate_player_cw() {
     int t1_y = player.t1.pos.y;
     int t2_y = player.t2.pos.y;
 
+    short t1_con = player.t1.connected;
+    short t2_con = player.t2.connected;
+
     if (t1_x < t2_x) {
         LOG("cw rotation 1");
         t1_y -= 1;
         t2_x -= 1;
+        t1_con = CON_DOWN;
+        t2_con = CON_UP;
     } else if (t1_x == t2_x && t1_y < t2_y) {
         LOG("cw rotation 2");
         t1_y += 1;
         t1_x += 1;
+        t1_con = CON_LEFT;
+        t2_con = CON_RIGHT;
     } else if (t1_x > t2_x && t1_y == t2_y) {
         LOG("cw rotation 3");
         t1_x -= 1;
         t2_y -= 1;
+        t1_con = CON_UP;
+        t2_con = CON_DOWN;
     } else {
         LOG("cw rotation 4");
         t2_x += 1;
         t2_y += 1;
+        t1_con = CON_RIGHT;
+        t2_con = CON_LEFT;
     }
 
     if (t1_y < 0 || t2_y < 0) {
@@ -606,6 +680,9 @@ static void rotate_player_cw() {
 
     player.t1.pos = (vec2i){t1_x, t1_y};
     player.t2.pos = (vec2i){t2_x, t2_y};
+
+    player.t1.connected = t1_con;
+    player.t2.connected = t2_con;
 }
 
 static void rotate_player_ccw() {
@@ -614,22 +691,33 @@ static void rotate_player_ccw() {
     int t1_y = player.t1.pos.y;
     int t2_y = player.t2.pos.y;
 
+    short t1_con = player.t1.connected;
+    short t2_con = player.t2.connected;
+
     if (t1_x < t2_x) {
         LOG("ccw rotation 1");
         t1_x += 1;
         t2_y -= 1;
+        t1_con = CON_UP;
+        t2_con = CON_DOWN;
     } else if (t1_x == t2_x && t1_y > t2_y) {
         LOG("ccw rotation 2");
         t2_x -= 1;
         t2_y += 1;
+        t1_con = CON_LEFT;
+        t2_con = CON_RIGHT;
     } else if (t1_x > t2_x && t1_y == t2_y) {
         LOG("ccw rotation 3");
         t2_x += 1;
         t1_y -= 1;
+        t1_con = CON_DOWN;
+        t2_con = CON_UP;
     } else {
         LOG("ccw rotation 4");
         t1_y += 1;
         t1_x -= 1;
+        t1_con = CON_RIGHT;
+        t2_con = CON_LEFT;
     }
 
     if (t1_y < 0 || t2_y < 0) {
@@ -661,6 +749,9 @@ static void rotate_player_ccw() {
 
     player.t1.pos = (vec2i){t1_x, t1_y};
     player.t2.pos = (vec2i){t2_x, t2_y};
+
+    player.t1.connected = t1_con;
+    player.t2.connected = t2_con;
 }
 
 static void handle_input() {
@@ -670,6 +761,18 @@ static void handle_input() {
             case SDL_QUIT:
                 state.quit = true;
                 break;
+            case SDL_MOUSEBUTTONDOWN: {
+                int tile_index = pix_pos_to_grid_index(state.mouse_pos);
+                tile_t t = grid.tiles[tile_index];
+                LOG("\nTILE %d:\n.connected='%d',\n.letter='%c',\n.pos=(%d, %d),\n.filled=%d,\n.marked=%d",
+                    tile_index,
+                    t.connected,
+                    t.letter, t.pos.x,
+                    t.pos.y,
+                    t.filled,
+                    t.marked);
+                break;
+            }
             case SDL_MOUSEMOTION:
                 SDL_GetMouseState(&state.mouse_pos.x, &state.mouse_pos.y);
                 break;

@@ -37,6 +37,14 @@ typedef struct tile {
     bool marked;
     vec2i pos;
 
+    enum {
+        CON_NONE = 0,
+        CON_UP = 1,
+        CON_DOWN = 2,
+        CON_LEFT = 3,
+        CON_RIGHT = 4,
+    } connected;
+
     obj_info_t obj;
 } tile_t;
 

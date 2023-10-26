@@ -1,7 +1,16 @@
 #pragma once
 
+#define DEBUG
+
 #define ASSERT(_e, ...) if (!(_e)) { fprintf(stderr, "[ERROR] %s %d: ", __FILE__, __LINE__); fprintf(stderr, __VA_ARGS__);  exit(1); }
 #define LOG(...) do { fprintf(stderr, "[LOG] %s %d: ", __FILE__, __LINE__); fprintf(stderr, __VA_ARGS__); printf("\n"); } while (0)
+
+#ifdef DEBUG
+#define IFDEBUG_LOG(...) LOG(__VA_ARGS__)
+#else
+#define IFDEBUG_LOG(...)
+#endif
+
 
 #define SCREEN_WIDTH 1080
 #define SCREEN_HEIGHT 720
