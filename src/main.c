@@ -7,12 +7,11 @@
 #include <time.h>
 
 #include "../include/types.h"
-#include "../include/vec.h"
-#include "../include/sprite.h"
 #include "../include/lpool.h"
 #include "../include/trie.h"
 #include "../include/macros.h"
 #include "../include/render.h"
+#include "../include/tile.h"
 
 struct {
     SDL_Window *window;
@@ -59,7 +58,6 @@ struct {
     player_orientation_t or;
     tile_t t1, t2;
 } player;
-
 
 u32 *load_img_pixels(const char *file) {
     SDL_Surface *surface = IMG_Load(file);
@@ -129,38 +127,6 @@ static tile_t *default_tile() {
     };
 }
 
-static void grid_clear() {
-    for (int i = 0; i < grid.width * grid.height; i++)
-        grid.tiles[i] = *default_tile();
-}
-
-static tile_t *grey_tile(int x, int y) {
-    IFDEBUG_LOG("Created default tile");
-    char letter = lpool_random_letter(&state.letter_pool) ;
-    return &(tile_t){
-        .letter=letter,
-        .marked=false,
-        .filled=true,
-        .stuck=true,
-        .connected=CON_NONE,
-        .pos={x, y},
-        .obj=(obj_info_t){
-            .size={64, 64},
-            .pos = {x * TILE_SIZE + grid.obj.pos.x, y * TILE_SIZE + grid.obj.pos.y},
-            .sprite=&sprites[letter - 'A'],
-        },
-    };
-}
-
-static void grid_randomize_grey_tiles() {
-    for (int i = 0; i < grid.width * grid.height; i++) {
-        if (i > rand() % 240) {
-            grid.tiles[i] = *grey_tile(i % grid.width, i / grid.width);
-        }
-    }
-}
-
-
 /*
  
  DRAWING
@@ -184,7 +150,7 @@ static void draw_tile(tile_t t) {
 
         pix_buf_render(x, y, t.obj.sprite->width, t.obj.sprite->height, pixels, state.texture);
     }
-    else if (t.stuck) {
+    else if (t.greyed) {
         u32 *pixels = clone_pixels(t.obj.sprite->pixels, t.obj.sprite->width * t.obj.sprite->height);
 
         for (int i = 0; i < t.obj.sprite->width * t.obj.sprite->height; i++) {
@@ -258,6 +224,20 @@ static void set_player() {
         player.t2.letter);
 }
 
+static void player_set_greyed() {
+    player.t1.greyed = true;
+    player.t2.greyed = true;
+    grid.tiles[(player.t1.pos.y * GAMEBOARD_WIDTH) + player.t1.pos.x] = player.t1;
+    grid.tiles[(player.t2.pos.y * GAMEBOARD_WIDTH) + player.t2.pos.x] = player.t2;
+    IFDEBUG_LOG( "Set tiles at (%d, %d) and (%d, %d) : (%c %c)",
+        player.t1.pos.x,
+        player.t1.pos.y,
+        player.t2.pos.x,
+        player.t2.pos.y,
+        player.t1.letter,
+        player.t2.letter);
+}
+
 static void render() {
     clear_pixel_buf(state.pixels, SCREEN_WIDTH * SCREEN_HEIGHT);
     draw_bg();
@@ -310,7 +290,6 @@ static void move_tile(tile_t *t, vec2i move) {
 }
 
 static void move_player(vec2i move) {
-    // LOG("move_player: t1.pos=(%d,%d), t2.pos=(%d,%d)", player.t1.pos.x, player.t1.pos.y, player.t2.pos.x, player.t2.pos.y);
     player.t1.pos = vector_add(player.t1.pos, move);
     player.t2.pos = vector_add(player.t2.pos, move);
 }
@@ -472,7 +451,7 @@ static bool grid_clear_marked() {
     return cleared;
 }
 
-static bool grid_scan_marked() {
+static bool grid_scan_for_words() {
     bool marked = false;
 
     LOG("before grid_hori");
@@ -486,13 +465,14 @@ static bool grid_scan_marked() {
 }
 
 
-static tile_t *tile_create(u8 letter, bool filled, bool marked, uint x, uint y) {
+static tile_t *tile_create(u8 letter, bool filled, bool marked, bool greyed, uint x, uint y) {
     tile_t *t = &(tile_t){
         .letter = letter,
         .filled = filled,
         .marked = marked,
+        .greyed = greyed,
+        .connected = CON_NONE,
         .pos = {x, y},
-
         .obj = (obj_info_t){
             .sprite = &sprites[letter - 'A'],
             .pos = {x * TILE_SIZE + grid.obj.pos.x, y * TILE_SIZE + grid.obj.pos.y},
@@ -503,13 +483,26 @@ static tile_t *tile_create(u8 letter, bool filled, bool marked, uint x, uint y) 
     return t;
 }
 
+static void grid_randomize_grey_tiles() {
+    int count = 0;
+    int max = 10;
+    for (int i = grid.width * 2; i < grid.width * grid.height; i++) {
+        if (i > rand() % 240 && count < 10) {
+            grid.tiles[i] = *tile_create(lpool_random_letter(&state.letter_pool), true, false, true, i % grid.width, i / grid.width);
+            count++;
+        }
+    }
+}
+
+
 static void queue_enqueue() {
-    queue.tiles[0] = *tile_create(lpool_random_letter(&state.letter_pool), true, false, -1, -1);
-    queue.tiles[1] = *tile_create(lpool_random_letter(&state.letter_pool), true, false, -1, -1);
+    queue.tiles[0] = *tile_create(lpool_random_letter(&state.letter_pool), true, false, false, -1, -1);
+    queue.tiles[1] = *tile_create(lpool_random_letter(&state.letter_pool), true, false, false, -1, -1);
     LOG("Enqueued two tiles");
 }
 
-static void spawn_player() {
+// true if successful, false otherwise
+static bool spawn_player() {
     player.or = HORI_AB;
 
     player.t1 = queue.tiles[0];
@@ -524,33 +517,50 @@ static void spawn_player() {
     player.t2.connected=CON_LEFT;
 
     LOG("Spawned player");
+    if (grid.tiles[at(player.t1.pos.y, player.t1.pos.x, grid.width)].filled ||
+        grid.tiles[at(player.t2.pos.y, player.t2.pos.x, grid.width)].filled) {
+        return false;
+    }
+
+    return true;
 }
 
-static void update_tile_connections() {
+static bool update_tile_connections() {
+    bool updated = false;
     for (int i = 0; i < grid.width * grid.height; i++) {
         if (grid.tiles[i].filled) {
             switch(grid.tiles[i].connected) {
                 case(CON_LEFT):
-                    if (grid.tiles[i - 1].connected != CON_RIGHT || !grid.tiles[i - 1].filled)
+                    if (grid.tiles[i - 1].connected != CON_RIGHT) {
+                        updated = true;
                         grid.tiles[i].connected = CON_NONE;
+                    }
                     break;
                 case(CON_RIGHT):
-                    if (grid.tiles[i + 1].connected != CON_LEFT || !grid.tiles[i + 1].filled)
+                    if (grid.tiles[i + 1].connected != CON_LEFT) {
+                        updated = true;
                         grid.tiles[i].connected = CON_NONE;
+                    }
                     break;
                 case(CON_UP):
-                    if (grid.tiles[i - grid.width].connected != CON_DOWN || !grid.tiles[i - grid.width].filled)
+                    if (grid.tiles[i - grid.width].connected != CON_DOWN) {
+                        updated = true;
                         grid.tiles[i].connected = CON_NONE;
+                    }
                     break;
                 case(CON_DOWN):
-                    if (grid.tiles[i + grid.width].connected != CON_UP || !grid.tiles[i + grid.width].filled)
+                    if (grid.tiles[i + grid.width].connected != CON_UP) {
+                        updated = true;
                         grid.tiles[i].connected = CON_NONE;
+                    }
                     break;
                 default:
                     break;
             }
         }
     }
+
+    return updated;
 }
 
 static bool update_world_physics() {
@@ -558,7 +568,7 @@ static bool update_world_physics() {
 
     vec2i move = {0, 1};
     for (int i = ((grid.width * grid.height) - grid.width) - 1; i > -1; i--) {
-        if (grid.tiles[i].stuck) {
+        if (grid.tiles[i].greyed) {
             continue;
         }
         switch(grid.tiles[i].connected) {
@@ -598,13 +608,15 @@ void stop_player() {
     player.active = false;
 }
 
-static void update_player_physics() {
+static bool update_player_physics() {
     vec2i fall = {0, 1};
     if (check_player_in_grid(fall) && check_player_move(fall)) {
         move_player(fall);
+        return true;
     } else {
         stop_player();
     }
+    return false;
 }
 
 static void update_tick() {
@@ -617,18 +629,19 @@ static void update_tick() {
         state.tick = 1000;
 
     if (SDL_GetTicks() >= state.time + state.tick) {
+        update_tile_connections();
+
         state.time = SDL_GetTicks();
 
         // Scan for words only if not already scanned
         if (!state.clearing) {
-            if (grid_scan_marked()) {
+            if (grid_scan_for_words()) {
                 state.clearing = true;
                 return;
             }
         } else {
             // Clear the board of marked files
             grid_clear_marked();
-            update_tile_connections();
             state.clearing = false;
         }
 
@@ -861,7 +874,9 @@ static void handle_input() {
                         flip_player();
                         break;
                     case SDLK_SPACE:
-                        grid_clear_marked();
+                        player_set_greyed();
+                        stop_player();
+                        // grid_clear_marked();
                         break;
                     default:
                         break;
@@ -888,8 +903,8 @@ static void queue_init() {
     LOG("Creating queue...");
     int x = (SCREEN_WIDTH - (4 * TILE_SIZE));
     int y = TILE_SIZE * 1.5;
-    int w = 64 * 3;
-    int h = 64 * 2;
+    int w = TILE_SIZE * 3;
+    int h = TILE_SIZE * 2;
 
     queue.obj = (obj_info_t){
         .size = {w, h},
@@ -934,14 +949,13 @@ static void init_game() {
 
     state.dict_trie = trie_node_create();
     trie_construct(state.dict_trie, "./dictionary.txt");
-    state.tick = 1000;
-    state.time = SDL_GetTicks();
 
     lpool_init(&state.letter_pool);
     lpool_populate(&state.letter_pool);
 
     grid_init(8, 10);
-    // grid_randomize_grey_tiles();
+    grid_randomize_grey_tiles();
+
     queue_init();
     spawn_player();
     queue_enqueue();

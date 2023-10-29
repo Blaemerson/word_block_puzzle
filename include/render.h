@@ -2,6 +2,7 @@
 
 #include <SDL2/SDL_render.h>
 #include "types.h"
+#include "obj.h"
 
 void obj_render(obj_info_t *obj, SDL_Texture *tex);
 void sprite_render(int x, int y, sprite *s, SDL_Texture *tex);

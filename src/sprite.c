@@ -40,6 +40,6 @@ sprite sprite_create_from(usize w, usize h, u32* pixels) {
     return sp;
 }
 
-void sprite_pixel_color(sprite sp, int x, int y, u32 color) {
-    sp.pixels[(x * sp.width) + y] = color;
+void sprite_pixel_color(sprite *sp, int x, int y, u32 color) {
+    sp->pixels[(x * sp->width) + y] = color;
 }
