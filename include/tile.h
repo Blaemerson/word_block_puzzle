@@ -1,5 +1,7 @@
 #pragma once
+#include "obj.h"
 #include "types.h"
+#include "vec.h"
 
 typedef struct tile {
     u8 letter;

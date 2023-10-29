@@ -8,10 +8,11 @@
 
 #include "../include/types.h"
 #include "../include/lpool.h"
-#include "../include/trie.h"
+// #include "../include/trie.h"
 #include "../include/macros.h"
 #include "../include/render.h"
 #include "../include/tile.h"
+#include "../include/word.h"
 
 struct {
     SDL_Window *window;
@@ -115,7 +116,7 @@ static u32 at(uint x, uint y, u32 width) {
     return (x * width) + y;
 }
 
-static tile_t *default_tile() {
+static tile_t *create_empty_tile() {
     IFDEBUG_LOG("Created default tile");
     return &(tile_t){
         .letter='\0',
@@ -133,7 +134,7 @@ static tile_t *default_tile() {
 
 */
 static void clear_pixel_buf(u32 *pix, usize size) {
-    for (int i = 0; i < SCREEN_WIDTH * SCREEN_HEIGHT; i++) {
+    for (int i = 0; i < size; i++) {
         state.pixels[i] = 0x00000000;
     }
 }
@@ -227,8 +228,8 @@ static void set_player() {
 static void player_set_greyed() {
     player.t1.greyed = true;
     player.t2.greyed = true;
-    grid.tiles[(player.t1.pos.y * GAMEBOARD_WIDTH) + player.t1.pos.x] = player.t1;
-    grid.tiles[(player.t2.pos.y * GAMEBOARD_WIDTH) + player.t2.pos.x] = player.t2;
+    grid.tiles[(player.t1.pos.y * grid.width) + player.t1.pos.x] = player.t1;
+    grid.tiles[(player.t2.pos.y * grid.width) + player.t2.pos.x] = player.t2;
     IFDEBUG_LOG( "Set tiles at (%d, %d) and (%d, %d) : (%c %c)",
         player.t1.pos.x,
         player.t1.pos.y,
@@ -263,9 +264,6 @@ static bool check_tile_in_grid(tile_t t, vec2i move) {
             dest.y >= 0);
 }
 
-static bool check_player_in_grid(vec2i move) {
-    return check_tile_in_grid(player.t1, move) && check_tile_in_grid(player.t2, move);
-}
 
 static bool check_tile_move(tile_t t, vec2i move) {
 
@@ -274,10 +272,6 @@ static bool check_tile_move(tile_t t, vec2i move) {
         return true;
     }
     return false;
-}
-
-static bool check_player_move(vec2i move) {
-    return check_tile_move(player.t1, move) && check_tile_move(player.t2, move);
 }
 
 static void move_tile(tile_t *t, vec2i move) {
@@ -289,84 +283,23 @@ static void move_tile(tile_t *t, vec2i move) {
     grid.tiles[old_idx] = (tile_t){.letter = ' '};
 }
 
-static void move_player(vec2i move) {
+static bool check_player_in_grid(vec2i move) {
+    return check_tile_in_grid(player.t1, move) && check_tile_in_grid(player.t2, move);
+}
+
+static inline bool check_player_move(vec2i move) {
+    return check_tile_move(player.t1, move) && check_tile_move(player.t2, move);
+}
+
+static void player_move(vec2i move) {
     player.t1.pos = vector_add(player.t1.pos, move);
     player.t2.pos = vector_add(player.t2.pos, move);
 }
 
 
-static void clear_player() {
-    player.t1 = *default_tile();
-    player.t2 = *default_tile();
-}
-
-// word is viable if it contains and vowel and a consonant
-static bool check_word_viability(char* word) {
-    bool contains_vowel = false;
-    bool contains_consonant = false;
-
-    for (int i = 0; i < strlen(word); i++) {
-        switch(word[i]) {
-            case 'a': case 'e': case 'i': case 'o': case 'u':
-                contains_vowel = true;
-                break;
-            default:
-                contains_consonant = true;
-                break;
-        }
-    }
-
-    return contains_vowel && contains_consonant;
-}
-
-// check that a substring is the minimum length and contains no spaces.
-static const bool check_string_validity(const char* substring) {
-    const int length = strlen(substring);
-
-    for (int i = 0; i < length; i++) {
-        if (substring[i] == ' ') {
-            return false;
-        }
-    }
-
-    if (length < 3) {
-        return false;
-    }
-
-    return true;
-}
-
-
-// check for words in a given row of characters
-static bool check_substrings(const char* str, uint* indices) {
-    int len = strlen(str);
-    int maxLen = len < grid.height ? len : grid.height;
-
-    for (int subLen = maxLen; subLen >= 3; subLen--) {
-        for (int i = 0; i <= len - subLen; i++) {
-            char substr[subLen + 1];
-            strncpy(substr, str + i, subLen);
-            substr[subLen] = '\0';
-
-
-            if (check_word_viability(substr) && check_string_validity(substr)) {
-                if (trie_search_word(state.dict_trie, substr)) {
-                    int indexStart = i;
-                    int indexEnd = i + subLen;
-
-                    for (int x = indexStart; x < indexEnd; x++) {
-                        IFDEBUG_LOG("Marked %d", indices[x]);
-                        grid.tiles[indices[x]].marked = true;
-                    }
-                    IFDEBUG_LOG("WORD FOUND: %s", substr);
-
-                    return true;
-                }
-            }
-        }
-    }
-
-    return false;
+static void player_clear() {
+    player.t1 = *create_empty_tile();
+    player.t2 = *create_empty_tile();
 }
 
 
@@ -394,7 +327,7 @@ static bool grid_scan_hori() {
             }
             row.indices[j] = i + j;
         }
-        found_word = check_substrings(row.letters, row.indices) || found_word;
+        found_word = check_substrings(row.letters, row.indices, grid.tiles, grid.width, grid.height, state.dict_trie) || found_word;
 
         free(row.letters);
         free(row.indices);
@@ -429,7 +362,7 @@ static bool grid_scan_vert() {
         }
 
 
-        found_word = check_substrings(col.letters, col.indices) || found_word;
+        found_word = check_substrings(col.letters, col.indices, grid.tiles, grid.width, grid.height, state.dict_trie) || found_word;
 
         free(col.letters);
         free(col.indices);
@@ -444,7 +377,7 @@ static bool grid_clear_marked() {
     for (int i = 0; i < grid.width * grid.height; i++) {
         if (grid.tiles[i].marked) {
             cleared = true;
-            grid.tiles[i] = *default_tile();
+            grid.tiles[i] = *create_empty_tile();
         }
     }
 
@@ -602,7 +535,7 @@ void stop_player() {
     set_player();
     LOG("Player set");
     state.halt = true;
-    clear_player();
+    player_clear();
     LOG("Cleared player");
 
     player.active = false;
@@ -611,7 +544,7 @@ void stop_player() {
 static bool update_player_physics() {
     vec2i fall = {0, 1};
     if (check_player_in_grid(fall) && check_player_move(fall)) {
-        move_player(fall);
+        player_move(fall);
         return true;
     } else {
         stop_player();
@@ -839,14 +772,14 @@ static void handle_input() {
                     case SDLK_LEFT: {
                         vec2i move = (vec2i){-1, 0};
                         if (player_check_movement(move))
-                            move_player(move);
+                            player_move(move);
                         break;
                     }
                     case SDLK_d:
                     case SDLK_RIGHT: {
                         vec2i move = (vec2i){1, 0};
                         if (player_check_movement(move))
-                            move_player(move);
+                            player_move(move);
                         break;
                     }
                     case SDLK_s:
@@ -855,7 +788,7 @@ static void handle_input() {
                             vec2i move = (vec2i){0, 1};
                             if (player_check_movement(move)) {
                                 state.time = SDL_GetTicks();
-                                move_player(move);
+                                player_move(move);
                             }
                             else {
                                 stop_player();
