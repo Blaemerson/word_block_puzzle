@@ -42,21 +42,8 @@ struct {
     obj_info_t obj;
 } queue;
 
-typedef enum {
-    CLOCKWISE,
-    COUNTER_CLOCKWISE,
-} rotation_t;
-
-typedef enum {
-    HORI_AB,
-    VERT_AB,
-    HORI_BA,
-    VERT_BA,
-} player_orientation_t;
-
 struct {
     bool active;
-    player_orientation_t or;
     tile_t t1, t2;
 } player;
 
@@ -165,11 +152,10 @@ static void draw_tile(tile_t t) {
     }
 }
 
-static void draw_tiles() {
-    for (int i = 0; i < GAMEBOARD_MAX; i++) {
-        if (grid.tiles[i].filled)
-            draw_tile(grid.tiles[i]);
-    }
+static void draw_tiles(tile_t *tiles, u32 count) {
+    for (int i = 0; i < count; i++)
+        if (tiles[i].filled)
+            draw_tile(tiles[i]);
 }
 
 static void draw_bg() {
@@ -196,7 +182,7 @@ static void draw_grid() {
 
 
 
-static void flip_player() {
+static void player_flip() {
     tile_t t1 = player.t1;
     player.t1.filled = player.t2.filled;
     player.t1.letter = player.t2.letter;
@@ -208,12 +194,12 @@ static void flip_player() {
 
 }
 
-static void draw_player() {
+static void player_draw() {
     draw_tile(player.t1);
     draw_tile(player.t2);
 }
 
-static void set_player() {
+static void player_set() {
     grid.tiles[(player.t1.pos.y * GAMEBOARD_WIDTH) + player.t1.pos.x] = player.t1;
     grid.tiles[(player.t2.pos.y * GAMEBOARD_WIDTH) + player.t2.pos.x] = player.t2;
     IFDEBUG_LOG( "Set tiles at (%d, %d) and (%d, %d) : (%c %c)",
@@ -246,11 +232,11 @@ static void render() {
 
     SDL_UpdateTexture(state.texture, NULL, state.pixels, SCREEN_WIDTH * 4);
 
-    draw_tiles();
+    draw_tiles(grid.tiles, grid.width * grid.height);
 
     queue_render();
 
-    if (player.active) draw_player();
+    if (player.active) player_draw();
 
     SDL_RenderCopyEx(state.renderer, state.texture, NULL, NULL, 0.0, NULL, SDL_FLIP_NONE);
     SDL_RenderPresent(state.renderer);
@@ -436,8 +422,6 @@ static void queue_enqueue() {
 
 // true if successful, false otherwise
 static bool spawn_player() {
-    player.or = HORI_AB;
-
     player.t1 = queue.tiles[0];
     player.t2 = queue.tiles[1];
 
@@ -532,7 +516,7 @@ static bool update_world_physics() {
 }
 
 void stop_player() {
-    set_player();
+    player_set();
     LOG("Player set");
     state.halt = true;
     player_clear();
@@ -601,143 +585,134 @@ void tile_set_marked(tile_t *t, bool marked) {
     t->marked = marked;
 }
 
-static void rotate_player_cw() {
-    int t1_x = player.t1.pos.x;
-    int t2_x = player.t2.pos.x;
-    int t1_y = player.t1.pos.y;
-    int t2_y = player.t2.pos.y;
+static void player_rotate_cw() {
+    vec2i t1pos = player.t1.pos;
+    vec2i t2pos = player.t2.pos;
 
-    short t1_con = player.t1.connected;
-    short t2_con = player.t2.connected;
+    short t1con = player.t1.connected;
+    short t2con = player.t2.connected;
 
-    if (t1_x < t2_x) {
+    if (t1pos.x < t2pos.x) {
         LOG("cw rotation 1");
-        t1_y -= 1;
-        t2_x -= 1;
-        t1_con = CON_DOWN;
-        t2_con = CON_UP;
-    } else if (t1_x == t2_x && t1_y < t2_y) {
+        t1pos.y -= 1;
+        t2pos.x -= 1;
+        t1con = CON_DOWN;
+        t2con = CON_UP;
+    } else if (t1pos.x == t2pos.x && t1pos.y < t2pos.y) {
         LOG("cw rotation 2");
-        t1_y += 1;
-        t1_x += 1;
-        t1_con = CON_LEFT;
-        t2_con = CON_RIGHT;
-    } else if (t1_x > t2_x && t1_y == t2_y) {
+        t1pos.y += 1;
+        t1pos.x += 1;
+        t1con = CON_LEFT;
+        t2con = CON_RIGHT;
+    } else if (t1pos.x > t2pos.x && t1pos.y == t2pos.y) {
         LOG("cw rotation 3");
-        t1_x -= 1;
-        t2_y -= 1;
-        t1_con = CON_UP;
-        t2_con = CON_DOWN;
+        t1pos.x -= 1;
+        t2pos.y -= 1;
+        t1con = CON_UP;
+        t2con = CON_DOWN;
     } else {
         LOG("cw rotation 4");
-        t2_x += 1;
-        t2_y += 1;
-        t1_con = CON_RIGHT;
-        t2_con = CON_LEFT;
+        t2pos.x += 1;
+        t2pos.y += 1;
+        t1con = CON_RIGHT;
+        t2con = CON_LEFT;
     }
 
-    if (t1_y < 0 || t2_y < 0) {
+    if (t1pos.y < 0 || t2pos.y < 0) {
         return;
     }
 
     bool kick_check =
-        (grid.tiles[at(t2_y, t2_x, grid.width)].filled &&
-        !grid.tiles[at(t2_y, t2_x - 1, grid.width)].filled) || (t1_x >= grid.width) || (t2_x >= grid.width) ||
-        (grid.tiles[at(t1_y, t1_x, grid.width)].filled &&
-        !grid.tiles[at(t1_y, t1_x - 1, grid.width)].filled);
+        (grid.tiles[at(t2pos.y, t2pos.x, grid.width)].filled &&
+        !grid.tiles[at(t2pos.y, t2pos.x - 1, grid.width)].filled) || (t1pos.x >= grid.width) || (t2pos.x >= grid.width) ||
+        (grid.tiles[at(t1pos.y, t1pos.x, grid.width)].filled &&
+        !grid.tiles[at(t1pos.y, t1pos.x - 1, grid.width)].filled);
 
     if (kick_check) {
         LOG("kick left");
-        t1_x -= 1;
-        t2_x -= 1;
+        t1pos.x -= 1;
+        t2pos.x -= 1;
     }
 
-
-    bool t1_check =
-        (grid.tiles[at(t1_y, t1_x, grid.width)].filled ||
-        t1_x < 0 || t1_x >= grid.width);
-    bool t2_check =
-        (grid.tiles[at(t2_y, t2_x, grid.width)].filled ||
-        t2_x < 0 || t2_x >= grid.width);
+    bool t1_check = (grid.tiles[at(t1pos.y, t1pos.x, grid.width)].filled || t1pos.x < 0 || t1pos.x >= grid.width);
+    bool t2_check = (grid.tiles[at(t2pos.y, t2pos.x, grid.width)].filled || t2pos.x < 0 || t2pos.x >= grid.width);
 
     if (t1_check || t2_check) {
         return;
     }
 
-    player.t1.pos = (vec2i){t1_x, t1_y};
-    player.t2.pos = (vec2i){t2_x, t2_y};
+    player.t1.pos = t1pos;
+    player.t2.pos = t2pos;
 
-    player.t1.connected = t1_con;
-    player.t2.connected = t2_con;
+    player.t1.connected = t1con;
+    player.t2.connected = t2con;
 }
 
-static void rotate_player_ccw() {
-    int t1_x = player.t1.pos.x;
-    int t2_x = player.t2.pos.x;
-    int t1_y = player.t1.pos.y;
-    int t2_y = player.t2.pos.y;
+static void player_rotate_ccw() {
+    vec2i t1pos = player.t1.pos;
+    vec2i t2pos = player.t2.pos;
 
-    short t1_con = player.t1.connected;
-    short t2_con = player.t2.connected;
+    short t1con = player.t1.connected;
+    short t2con = player.t2.connected;
 
-    if (t1_x < t2_x) {
+    if (t1pos.x < t2pos.x) {
         LOG("ccw rotation 1");
-        t1_x += 1;
-        t2_y -= 1;
-        t1_con = CON_UP;
-        t2_con = CON_DOWN;
-    } else if (t1_x == t2_x && t1_y > t2_y) {
+        t1pos.x += 1;
+        t2pos.y -= 1;
+        t1con = CON_UP;
+        t2con = CON_DOWN;
+    } else if (t1pos.x == t2pos.x && t1pos.y > t2pos.y) {
         LOG("ccw rotation 2");
-        t2_x -= 1;
-        t2_y += 1;
-        t1_con = CON_LEFT;
-        t2_con = CON_RIGHT;
-    } else if (t1_x > t2_x && t1_y == t2_y) {
+        t2pos.x -= 1;
+        t2pos.y += 1;
+        t1con = CON_LEFT;
+        t2con = CON_RIGHT;
+    } else if (t1pos.x > t2pos.x && t1pos.y == t2pos.y) {
         LOG("ccw rotation 3");
-        t2_x += 1;
-        t1_y -= 1;
-        t1_con = CON_DOWN;
-        t2_con = CON_UP;
+        t2pos.x += 1;
+        t1pos.y -= 1;
+        t1con = CON_DOWN;
+        t2con = CON_UP;
     } else {
         LOG("ccw rotation 4");
-        t1_y += 1;
-        t1_x -= 1;
-        t1_con = CON_RIGHT;
-        t2_con = CON_LEFT;
+        t1pos.y += 1;
+        t1pos.x -= 1;
+        t1con = CON_RIGHT;
+        t2con = CON_LEFT;
     }
 
-    if (t1_y < 0 || t2_y < 0) {
+    if (t1pos.y < 0 || t2pos.y < 0) {
         return;
     }
 
     bool kick_check =
-        (grid.tiles[at(t2_y, t2_x, grid.width)].filled &&
-        !grid.tiles[at(t2_y, t2_x + 1, grid.width)].filled) || (t1_x < 0) || (t2_x < 0) ||
-        (grid.tiles[at(t1_y, t1_x, grid.width)].filled &&
-        !grid.tiles[at(t1_y, t1_x + 1, grid.width)].filled);
+        (grid.tiles[at(t2pos.y, t2pos.x, grid.width)].filled &&
+        !grid.tiles[at(t2pos.y, t2pos.x + 1, grid.width)].filled) || (t1pos.x < 0) || (t2pos.x < 0) ||
+        (grid.tiles[at(t1pos.y, t1pos.x, grid.width)].filled &&
+        !grid.tiles[at(t1pos.y, t1pos.x + 1, grid.width)].filled);
 
     if (kick_check) {
         LOG("kick right");
-        t1_x += 1;
-        t2_x += 1;
+        t1pos.x += 1;
+        t2pos.x += 1;
     }
 
     bool t1_move_failed =
-        (grid.tiles[at(t1_y, t1_x, grid.width)].filled ||
-        t1_x < 0 || t1_x >= grid.width);
+        (grid.tiles[at(t1pos.y, t1pos.x, grid.width)].filled ||
+        t1pos.x < 0 || t1pos.x >= grid.width);
     bool t2_move_failed =
-        (grid.tiles[at(t2_y, t2_x, grid.width)].filled ||
-        t2_x < 0 || t2_x >= grid.width);
+        (grid.tiles[at(t2pos.y, t2pos.x, grid.width)].filled ||
+        t2pos.x < 0 || t2pos.x >= grid.width);
 
     if (t1_move_failed || t2_move_failed) {
         return;
     }
 
-    player.t1.pos = (vec2i){t1_x, t1_y};
-    player.t2.pos = (vec2i){t2_x, t2_y};
+    player.t1.pos = t1pos;
+    player.t2.pos = t2pos;
 
-    player.t1.connected = t1_con;
-    player.t2.connected = t2_con;
+    player.t1.connected = t1con;
+    player.t2.connected = t2con;
 }
 
 static void handle_input() {
@@ -751,12 +726,7 @@ static void handle_input() {
                 int tile_index = pix_pos_to_grid_index(state.mouse_pos);
                 tile_t t = grid.tiles[tile_index];
                 LOG("\nTILE %d:\n.connected='%d',\n.letter='%c',\n.pos=(%d, %d),\n.filled=%d,\n.marked=%d",
-                    tile_index,
-                    t.connected,
-                    t.letter, t.pos.x,
-                    t.pos.y,
-                    t.filled,
-                    t.marked);
+                    tile_index, t.connected, t.letter, t.pos.x, t.pos.y, t.filled, t.marked);
                 break;
             }
             case SDL_MOUSEMOTION:
@@ -797,14 +767,14 @@ static void handle_input() {
                         break;
                     }
                     case SDLK_k:
-                        rotate_player_cw();
+                        player_rotate_cw();
                         break;
                     case SDLK_j:
-                        rotate_player_ccw();
+                        player_rotate_ccw();
                         break;
                     case SDLK_w:
                     case SDLK_UP:
-                        flip_player();
+                        player_flip();
                         break;
                     case SDLK_SPACE:
                         player_set_greyed();
@@ -848,35 +818,24 @@ static void queue_init() {
     LOG("Queue created");
 }
 
-static void init_engine() {
+static void sdl_init() {
     ASSERT(!SDL_Init(SDL_INIT_VIDEO),
            "SDL failed to initialize: %s\n", SDL_GetError());
 
-    state.window =
-        SDL_CreateWindow("Wordtris",
-                         SDL_WINDOWPOS_CENTERED_DISPLAY(1),
-                         SDL_WINDOWPOS_CENTERED_DISPLAY(1),
-                         SCREEN_WIDTH, SCREEN_HEIGHT,
-                         SDL_WINDOW_ALLOW_HIGHDPI);
+    state.window = SDL_CreateWindow("Wordtris", SDL_WINDOWPOS_CENTERED_DISPLAY(1), SDL_WINDOWPOS_CENTERED_DISPLAY(1), SCREEN_WIDTH, SCREEN_HEIGHT, SDL_WINDOW_ALLOW_HIGHDPI);
 
     ASSERT(state.window, "Failed to create SDL Window: %s\n", SDL_GetError());
 
-    state.renderer =
-        SDL_CreateRenderer(state.window, -1, SDL_RENDERER_PRESENTVSYNC);
+    state.renderer = SDL_CreateRenderer(state.window, -1, SDL_RENDERER_PRESENTVSYNC);
 
     ASSERT(state.renderer, "Failed to create SDL Renderer: %s\n", SDL_GetError());
 
-    state.texture
-        = SDL_CreateTexture(state.renderer,
-                            SDL_PIXELFORMAT_ABGR8888,
-                            SDL_TEXTUREACCESS_STREAMING,
-                            SCREEN_WIDTH,
-                            SCREEN_HEIGHT);
+    state.texture = SDL_CreateTexture(state.renderer, SDL_PIXELFORMAT_ABGR8888, SDL_TEXTUREACCESS_STREAMING, SCREEN_WIDTH, SCREEN_HEIGHT);
 
     ASSERT(state.renderer, "Failed to create SDL Texture: %s\n", SDL_GetError());
 }
 
-static void init_game() {
+static void game_init() {
     srand(time(NULL));
     load_sprites();
 
@@ -896,8 +855,8 @@ static void init_game() {
 
 int main(int argc, char *argv[]) {
 
-    init_engine();
-    init_game();
+    sdl_init();
+    game_init();
 
     while (!state.quit) {
         update_tick();
