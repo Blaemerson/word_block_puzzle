@@ -5,13 +5,13 @@
 #include "../include/lpool.h"
 #include "../include/macros.h"
 
-void lpool_init(struct LetterPool* pool) {
+void lpool_init(struct letter_pool* pool) {
     pool->head = NULL;
     pool->totalWeight = 0;
 }
 
-void lpool_add_letter(struct LetterPool* pool, char letter, int weight) {
-    struct LetterNode* newNode = (struct LetterNode*)malloc(sizeof(struct LetterNode));
+void lpool_add_letter(struct letter_pool* pool, char letter, int weight) {
+    struct letter_node* newNode = (struct letter_node*)malloc(sizeof(struct letter_node));
     newNode->letter = letter;
     newNode->weight = weight;
     newNode->next = NULL;
@@ -19,7 +19,7 @@ void lpool_add_letter(struct LetterPool* pool, char letter, int weight) {
     if (pool->head == NULL) {
         pool->head = newNode;
     } else {
-        struct LetterNode* current = pool->head;
+        struct letter_node* current = pool->head;
         while (current->next != NULL) {
             current = current->next;
         }
@@ -29,7 +29,7 @@ void lpool_add_letter(struct LetterPool* pool, char letter, int weight) {
     pool->totalWeight += weight;
 }
 
-void lpool_populate(struct LetterPool* pool) {
+void lpool_populate(struct letter_pool* pool) {
     lpool_add_letter(pool, 'A', 6);
     lpool_add_letter(pool, 'B', 2);
     lpool_add_letter(pool, 'C', 3);
@@ -58,9 +58,9 @@ void lpool_populate(struct LetterPool* pool) {
     lpool_add_letter(pool, 'Z', 1);
 }
 
-char lpool_random_letter(struct LetterPool* pool) {
+char lpool_random_letter(struct letter_pool* pool) {
     int randomWeight = rand() % pool->totalWeight;
-    struct LetterNode* current = pool->head;
+    struct letter_node* current = pool->head;
 
     while (current != NULL) {
         randomWeight -= current->weight;
@@ -75,10 +75,10 @@ char lpool_random_letter(struct LetterPool* pool) {
     return '\0';
 }
 
-void lpool_destroy(struct LetterPool* pool) {
-    struct LetterNode* current = pool->head;
+void lpool_destroy(struct letter_pool* pool) {
+    struct letter_node* current = pool->head;
     while (current != NULL) {
-        struct LetterNode* next = current->next;
+        struct letter_node* next = current->next;
         free(current);
         current = next;
     }

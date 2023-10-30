@@ -4,10 +4,11 @@
 #include <string.h>
 
 #include "../include/trie.h"
+#include "../include/tile.h"
 #include "../include/macros.h"
 
-struct TrieNode* trie_node_create() {
-    struct TrieNode* node = (struct TrieNode*)malloc(sizeof(struct TrieNode));
+struct dict_trie_node* trie_node_create() {
+    struct dict_trie_node* node = (struct dict_trie_node*)malloc(sizeof(struct dict_trie_node));
 
     for (int i = 0; i < MAX_CHILDREN; i++) {
         node->children[i] = NULL;
@@ -18,7 +19,7 @@ struct TrieNode* trie_node_create() {
     return node;
 }
 
-void trie_destroy(struct TrieNode* node) {
+void trie_destroy(struct dict_trie_node* node) {
     if (node == NULL) {
         return;
     }
@@ -30,8 +31,8 @@ void trie_destroy(struct TrieNode* node) {
     free(node);
 }
 
-void trie_insert_word(struct TrieNode* root, const char* word) {
-    struct TrieNode* curr = root;
+void trie_insert_word(struct dict_trie_node* root, const char* word) {
+    struct dict_trie_node* curr = root;
 
     for (int i = 0; word[i] != '\0'; i++) {
         int index = word[i] - 'a'; // Convert character to index (assuming only lowercase alphabets)
@@ -46,7 +47,7 @@ void trie_insert_word(struct TrieNode* root, const char* word) {
     curr->is_end_of_word = true;
 }
 
-int trie_construct(struct TrieNode* root, const char* dict_file) {
+int trie_construct(struct dict_trie_node* root, const char* dict_file) {
     LOG("Construct dict trie");
     FILE* file = fopen(dict_file, "r");
 
@@ -66,8 +67,8 @@ int trie_construct(struct TrieNode* root, const char* dict_file) {
     return 0;
 }
 
-bool trie_search_word(struct TrieNode* root, const char* word) {
-    struct TrieNode* curr = root;
+bool trie_search_word(struct dict_trie_node* root, const char* word) {
+    struct dict_trie_node* curr = root;
 
     for (int i = 0; word[i] != '\0'; i++) {
         int index = word[i] - 'a'; // Convert character to index (assuming only lowercase alphabets)
@@ -83,3 +84,78 @@ bool trie_search_word(struct TrieNode* root, const char* word) {
 }
 
 
+// word is viable if it contains and vowel and a consonant
+const bool check_word_viability(char* word) {
+    bool contains_vowel = false;
+    bool contains_consonant = false;
+
+    for (int i = 0; i < strlen(word); i++) {
+        switch(word[i]) {
+            case 'a': case 'e': case 'i': case 'o': case 'u':
+                contains_vowel = true;
+                break;
+            default:
+                contains_consonant = true;
+                break;
+        }
+    }
+
+    return contains_vowel && contains_consonant;
+}
+
+// check that a substring is the minimum length and contains no spaces.
+const bool check_string_validity(const char* substring) {
+    const int length = strlen(substring);
+
+    for (int i = 0; i < length; i++) {
+        if (substring[i] == ' ') {
+            return false;
+        }
+    }
+
+    if (length < 3) {
+        return false;
+    }
+
+    return true;
+}
+
+
+// check for words in a given row of characters
+const bool check_substrings(
+    const char* str,
+    u32* indices,
+    tile_t *tiles,
+    usize grid_w,
+    usize grid_h,
+    struct dict_trie_node *dict)
+{
+    int len = strlen(str);
+    int maxLen = len < grid_h ? len : grid_h;
+
+    for (int subLen = maxLen; subLen >= 3; subLen--) {
+        for (int i = 0; i <= len - subLen; i++) {
+            char substr[subLen + 1];
+            strncpy(substr, str + i, subLen);
+            substr[subLen] = '\0';
+
+
+            if (check_word_viability(substr) && check_string_validity(substr)) {
+                if (trie_search_word(dict, substr)) {
+                    int indexStart = i;
+                    int indexEnd = i + subLen;
+
+                    for (int x = indexStart; x < indexEnd; x++) {
+                        // IFDEBUG_LOG("Marked %d", indices[x]);
+                        tiles[indices[x]].marked = true;
+                    }
+                    // IFDEBUG_LOG("WORD FOUND: %s", substr);
+
+                    return true;
+                }
+            }
+        }
+    }
+
+    return false;
+}

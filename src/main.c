@@ -19,8 +19,8 @@ struct {
     SDL_Texture *texture;
     SDL_Renderer *renderer;
 
-    struct TrieNode *dict_trie;
-    struct LetterPool letter_pool;
+    struct dict_trie_node *dict_trie;
+    struct letter_pool letter_pool;
 
     vec2i mouse_pos;
     u32 pixels[SCREEN_WIDTH * SCREEN_HEIGHT];
