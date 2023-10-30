@@ -16,3 +16,4 @@ void horiline(int x, int y0, int y1, u32 color, u32* pixels, int pix_buf_width);
 
 u32 *clone_pixels(u32 const * src, size_t len);
 
+u32 greyscale(u32 pix);

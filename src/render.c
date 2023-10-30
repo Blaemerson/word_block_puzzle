@@ -47,3 +47,11 @@ u32 * clone_pixels(u32 const * src, size_t len) {
    memcpy(p, src, len * sizeof(u32));
    return p;
 }
+
+inline u32 greyscale(u32 pix) {
+    u16 b = ((pix >> 16) & 0xFF);
+    u16 g = ((pix >> 8) & 0xFF);
+    u16 r = (pix & 0xFF);
+    u16 avg = (b + g + r) / 3;
+    return avg + (avg << 8) + (avg << 16);
+}

@@ -142,7 +142,7 @@ static void draw_tile(tile_t t) {
         u32 *pixels = clone_pixels(t.obj.sprite->pixels, t.obj.sprite->width * t.obj.sprite->height);
 
         for (int i = 0; i < t.obj.sprite->width * t.obj.sprite->height; i++) {
-            pixels[i] ^= 0xFFCCCC99;
+            pixels[i] = greyscale(pixels[i]);
         }
 
         pix_buf_render(x, y, t.obj.sprite->width, t.obj.sprite->height, pixels, state.texture);
