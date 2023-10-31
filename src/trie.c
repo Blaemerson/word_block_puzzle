@@ -131,31 +131,43 @@ const bool check_substrings(
     struct dict_trie_node *dict)
 {
     int len = strlen(str);
-    int maxLen = len < grid_h ? len : grid_h;
+    int max_len = len < grid_h ? len : grid_h;
 
-    for (int subLen = maxLen; subLen >= 3; subLen--) {
-        for (int i = 0; i <= len - subLen; i++) {
-            char substr[subLen + 1];
-            strncpy(substr, str + i, subLen);
-            substr[subLen] = '\0';
+    int longest = 0;
+    int index_start = -1;
+    int index_end = -1;
+
+    bool found = false;
+
+    for (int sub_len = max_len; sub_len >= 3; sub_len--) {
+        for (int i = 0; i <= len - sub_len; i++) {
+            char substr[sub_len + 1];
+            strncpy(substr, str + i, sub_len);
+            substr[sub_len] = '\0';
 
 
             if (check_word_viability(substr) && check_string_validity(substr)) {
                 if (trie_search_word(dict, substr)) {
-                    int indexStart = i;
-                    int indexEnd = i + subLen;
-
-                    for (int x = indexStart; x < indexEnd; x++) {
-                        // IFDEBUG_LOG("Marked %d", indices[x]);
-                        tiles[indices[x]].marked = true;
+                    if (sub_len > longest) {
+                        longest = sub_len;
+                        index_start = i;
+                        index_end = i + sub_len;
+                        found = true;
                     }
+
+                    break;
                     // IFDEBUG_LOG("WORD FOUND: %s", substr);
 
-                    return true;
+                    // return true;
                 }
             }
         }
     }
 
-    return false;
+    for (int x = index_start; x < index_end; x++) {
+        // IFDEBUG_LOG("Marked %d", indices[x]);
+        tiles[indices[x]].marked = true;
+    }
+
+    return found;
 }

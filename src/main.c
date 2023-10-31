@@ -285,8 +285,8 @@ static void player_draw() {
 }
 
 static void player_set() {
-    grid.tiles[(player.t1.pos.y * GAMEBOARD_WIDTH) + player.t1.pos.x] = player.t1;
-    grid.tiles[(player.t2.pos.y * GAMEBOARD_WIDTH) + player.t2.pos.x] = player.t2;
+    grid.tiles[(player.t1.pos.y * grid.width) + player.t1.pos.x] = player.t1;
+    grid.tiles[(player.t2.pos.y * grid.width) + player.t2.pos.x] = player.t2;
     IFDEBUG_LOG( "Set tiles at (%d, %d) and (%d, %d) : (%c %c)",
         player.t1.pos.x,
         player.t1.pos.y,
@@ -311,10 +311,11 @@ static void player_set_greyed() {
 }
 
 static void render() {
-    clear_pixel_buf(state.pixels, SCREEN_WIDTH * SCREEN_HEIGHT);
+    // clear_pixel_buf(state.pixels, SCREEN_WIDTH * SCREEN_HEIGHT);
     draw_bg();
     draw_grid();
 
+    SDL_SetTextureBlendMode(state.texture, SDL_BLENDMODE_BLEND);
     SDL_UpdateTexture(state.texture, NULL, state.pixels, SCREEN_WIDTH * 4);
 
     draw_tiles(grid.tiles, grid.width * grid.height);
@@ -323,6 +324,7 @@ static void render() {
 
     if (player.active) player_draw();
 
+    SDL_SetTextureBlendMode(state.texture, SDL_BLENDMODE_BLEND);
     SDL_RenderCopyEx(state.renderer, state.texture, NULL, NULL, 0.0, NULL, SDL_FLIP_NONE);
     SDL_RenderPresent(state.renderer);
 }
@@ -351,7 +353,7 @@ static void move_tile(tile_t *t, vec2i move) {
     int old_idx = (t->pos.y * grid.width) + t->pos.x;
     t->pos = vector_add(t->pos, move);
     grid.tiles[(t->pos.y * grid.width) + t->pos.x] = *t;
-    grid.tiles[old_idx] = (tile_t){.letter = ' '};
+    grid.tiles[old_idx] = *tile_create_empty();
 }
 
 static bool player_within_grid_check(vec2i move) {
@@ -458,8 +460,9 @@ static bool grid_clear_marked() {
 static bool grid_scan_for_words() {
     bool marked = false;
 
-    marked = grid_scan_horizontal();
-    marked = marked || grid_scan_vertical();
+    bool found_vert = grid_scan_vertical();
+    bool found_hori = grid_scan_horizontal();
+    marked = found_vert | found_hori;
 
     return marked;
 }
@@ -486,7 +489,7 @@ static tile_t *tile_create(u8 letter, bool filled, bool marked, bool greyed, uin
 static void grid_randomize_grey_tiles() {
     int count = 0;
     int max = 10;
-    for (int i = grid.width * 6; i < grid.width * grid.height; i++) {
+    for (int i = grid.width * 7; i < grid.width * grid.height; i++) {
         if (i > rand() % 240 && count < 10) {
             grid.tiles[i] = *tile_create(lpool_random_letter(&state.letter_pool), true, false, true, i % grid.width, i / grid.width);
             count++;
@@ -815,7 +818,7 @@ static void player_rotate_ccw() {
 
 
 static void grid_init(int cols, int rows) {
-    int grid_x = (SCREEN_WIDTH / 2) - ((8 * TILE_SIZE) / 2);
+    int grid_x = (SCREEN_WIDTH / 2) - ((10 * TILE_SIZE) / 2);
     int grid_y = TILE_SIZE / 2;
 
     grid.width = cols;
@@ -840,7 +843,7 @@ static void grid_destroy(struct grid* grid) {
 
 static void queue_init() {
     LOG("Creating queue...");
-    int x = (SCREEN_WIDTH - (3.75 * TILE_SIZE));
+    int x = (SCREEN_WIDTH - (3.25 * TILE_SIZE));
     int y = TILE_SIZE / 2;
     int w = TILE_SIZE * 3;
     int h = TILE_SIZE * 2;
@@ -953,7 +956,7 @@ static void game_init() {
     lpool_init(&state.letter_pool);
     lpool_populate(&state.letter_pool);
 
-    grid_init(8, 10);
+    grid_init(10, 10);
     grid_randomize_grey_tiles();
 
     queue_init();
@@ -963,7 +966,6 @@ static void game_init() {
 }
 
 int main(int argc, char *argv[]) {
-
     sdl_init();
     game_init();
 

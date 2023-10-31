@@ -30,7 +30,7 @@ void lpool_add_letter(struct letter_pool* pool, char letter, int weight) {
 }
 
 void lpool_populate(struct letter_pool* pool) {
-    lpool_add_letter(pool, 'A', 6);
+    lpool_add_letter(pool, 'A', 8);
     lpool_add_letter(pool, 'B', 2);
     lpool_add_letter(pool, 'C', 3);
     lpool_add_letter(pool, 'D', 6);
@@ -42,15 +42,15 @@ void lpool_populate(struct letter_pool* pool) {
     lpool_add_letter(pool, 'J', 1);
     lpool_add_letter(pool, 'K', 2);
     lpool_add_letter(pool, 'L', 3);
-    lpool_add_letter(pool, 'M', 2);
+    lpool_add_letter(pool, 'M', 3);
     lpool_add_letter(pool, 'N', 4);
     lpool_add_letter(pool, 'O', 10);
     lpool_add_letter(pool, 'P', 3);
     lpool_add_letter(pool, 'Q', 1);
     lpool_add_letter(pool, 'R', 3);
-    lpool_add_letter(pool, 'S', 4);
-    lpool_add_letter(pool, 'T', 3);
-    lpool_add_letter(pool, 'U', 7);
+    lpool_add_letter(pool, 'S', 6);
+    lpool_add_letter(pool, 'T', 4);
+    lpool_add_letter(pool, 'U', 6);
     lpool_add_letter(pool, 'V', 1);
     lpool_add_letter(pool, 'W', 2);
     lpool_add_letter(pool, 'X', 1);
