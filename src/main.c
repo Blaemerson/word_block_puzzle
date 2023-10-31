@@ -46,6 +46,27 @@ struct {
     tile_t t1, t2;
 } player;
 
+u32 *shrink_sprite(sprite *sp, uint factor) {
+    if (factor <= 0 || sp->width == 0 || sp->height == 0) {
+        return NULL; // Handle invalid input
+    }
+
+    uint w = (uint) (sp->width + factor - 1) / factor; // Round up the result
+    uint h = (uint) (sp->height + factor - 1) / factor;
+
+    u32 *pix = malloc(sizeof(u32) * w * h);
+
+    if (pix == NULL) {
+        return NULL; // Handle memory allocation failure
+    }
+
+    for (int i = 0, j = 0; i < sp->width * sp->height && j < w * h; i += factor, j++) {
+        pix[j] = sp->pixels[i];
+    }
+
+    return pix;
+}
+
 u32 *load_img_pixels(const char *file) {
     SDL_Surface *surface = IMG_Load(file);
     u32 *pixels;
@@ -125,7 +146,7 @@ static void clear_pixel_buf(u32 *pix, usize size) {
     }
 }
 
-static void draw_tile(tile_t t) {
+static void tile_draw(tile_t t) {
     u32 x = t.pos.x * t.obj.size.x + grid.obj.pos.x;
     u32 y = t.pos.y * t.obj.size.y + grid.obj.pos.y;
     if (t.marked) {
@@ -139,7 +160,7 @@ static void draw_tile(tile_t t) {
     }
     else if (t.greyed) {
         u32 *pixels = clone_pixels(t.obj.sprite->pixels, t.obj.sprite->width * t.obj.sprite->height);
-
+        //
         for (int i = 0; i < t.obj.sprite->width * t.obj.sprite->height; i++) {
             pixels[i] = greyscale(pixels[i]);
         }
@@ -147,14 +168,51 @@ static void draw_tile(tile_t t) {
         pix_buf_render(x, y, t.obj.sprite->width, t.obj.sprite->height, pixels, state.texture);
 
     } else {
-        sprite_render(x, y, t.obj.sprite, state.texture);
+
+        u32 *pixels = clone_pixels(t.obj.sprite->pixels, t.obj.sprite->width * t.obj.sprite->height);
+
+        int border = 3;
+        u32 base_color = pixels[t.obj.sprite->width * border + border];
+        if (t.connected == CON_RIGHT) {
+            uint three_rows = (t.obj.sprite->width * 3);
+            for (int i = three_rows + t.obj.sprite->width - 3; i < (t.obj.sprite->width * t.obj.sprite->height) - three_rows; i += t.obj.sprite->width) {
+                pixels[i] = (pixels[i - 3]);
+                pixels[i+1] = (pixels[i - 3]);
+                pixels[i+2] = (pixels[i - 3]);
+            }
+        } else if (t.connected == CON_LEFT) {
+            uint three_rows = (t.obj.sprite->width * 3);
+            for (int i = three_rows; i < (t.obj.sprite->width * t.obj.sprite->height) - three_rows; i += t.obj.sprite->width) {
+                pixels[i] = (pixels[i + 3]);
+                pixels[i+1] = (pixels[i + 3]);
+                pixels[i+2] = (pixels[i + 3]);
+            }
+        } else if (t.connected == CON_UP) {
+            uint three_rows = (t.obj.sprite->width * 3);
+            for (int i = 3; i < three_rows; i++) {
+                pixels[i] = (pixels[i + three_rows]);
+                pixels[i+1] = (pixels[i + three_rows]);
+                pixels[i+2] = (pixels[i + three_rows]);
+            }
+
+        } else if (t.connected == CON_DOWN) {
+            uint three_rows = (t.obj.sprite->width * 3);
+            for (int i = (t.obj.sprite->width * t.obj.sprite->height) - three_rows; i < (t.obj.sprite->width * t.obj.sprite->height); i++) {
+                pixels[i] = (pixels[i - three_rows]);
+                pixels[i+1] = (pixels[i - three_rows]);
+                pixels[i+2] = (pixels[i - three_rows]);
+            }
+        }
+
+        pix_buf_render(x, y, t.obj.sprite->width, t.obj.sprite->height, pixels, state.texture);
+        // sprite_render(x, y, t.obj.sprite, state.texture);
     }
 }
 
 static void draw_tiles(tile_t *tiles, u32 count) {
     for (int i = 0; i < count; i++)
         if (tiles[i].filled)
-            draw_tile(tiles[i]);
+            tile_draw(tiles[i]);
 }
 
 static void draw_bg() {
@@ -194,8 +252,8 @@ static void player_flip() {
 }
 
 static void player_draw() {
-    draw_tile(player.t1);
-    draw_tile(player.t2);
+    tile_draw(player.t1);
+    tile_draw(player.t2);
 }
 
 static void player_set() {
@@ -431,6 +489,7 @@ static bool spawn_player() {
     LOG("Spawned player");
     if (grid.tiles[at(player.t1.pos.y, player.t1.pos.x, grid.width)].filled ||
         grid.tiles[at(player.t2.pos.y, player.t2.pos.x, grid.width)].filled) {
+        state.quit = true;
         return false;
     }
 
@@ -556,12 +615,12 @@ static void update() {
     if (state.halt && !state.playing) {
         state.halt = update_world_physics();
         if (!state.halt) {
-            state.playing = true;
-            state.scanning = false;
             if (grid_scan_for_words()) {
+                state.scanning = false;
                 state.clearing = true;
                 return;
             }
+            state.playing = true;
             spawn_player();
             queue_enqueue();
         }
@@ -577,7 +636,7 @@ static void tick() {
     else if (state.clearing)
         state.tick = 300;
     else
-        state.tick = 1000;
+        state.tick = 1500;
 
     if (SDL_GetTicks() >= state.time + state.tick) {
         state.time = SDL_GetTicks();
@@ -753,8 +812,8 @@ static void grid_destroy(struct grid* grid) {
 
 static void queue_init() {
     LOG("Creating queue...");
-    int x = (SCREEN_WIDTH - (4 * TILE_SIZE));
-    int y = TILE_SIZE * 1.5;
+    int x = (SCREEN_WIDTH - (3.75 * TILE_SIZE));
+    int y = TILE_SIZE / 2;
     int w = TILE_SIZE * 3;
     int h = TILE_SIZE * 2;
 
