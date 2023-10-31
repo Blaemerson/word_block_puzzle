@@ -47,12 +47,12 @@ struct {
 } player;
 
 u32 *shrink_sprite(sprite *sp, uint factor) {
-    if (factor <= 0 || sp->width == 0 || sp->height == 0) {
+    if (sp->width == 0 || sp->height == 0) {
         return NULL; // Handle invalid input
     }
 
-    uint w = (uint) (sp->width + factor - 1) / factor; // Round up the result
-    uint h = (uint) (sp->height + factor - 1) / factor;
+    uint w = sp->width / factor; // Round up the result
+    uint h = sp->height / factor;
 
     u32 *pix = malloc(sizeof(u32) * w * h);
 
@@ -60,8 +60,36 @@ u32 *shrink_sprite(sprite *sp, uint factor) {
         return NULL; // Handle memory allocation failure
     }
 
-    for (int i = 0, j = 0; i < sp->width * sp->height && j < w * h; i += factor, j++) {
-        pix[j] = sp->pixels[i];
+    for (int i = 0, j = 0; i < (sp->width * sp->height) - (sp->width + factor) && j < (w * h); i += factor, j++) {
+        u32 quad[4];
+        quad[0] = sp->pixels[i];
+        quad[1] = sp->pixels[i + 1];
+        quad[2] = sp->pixels[i + sp->width];
+        quad[3] = sp->pixels[i + sp->width + 1];
+
+        u8 avg_alpha = ((quad[0] >> 24 & 0xFF) +
+                       ((quad[1] >> 24) & 0xFF) +
+                       ((quad[2] >> 24) & 0xFF) + 
+                       ((quad[3] >> 24) & 0xFF)) / 4;
+
+        u8 avg_blue =  ((quad[0] >> 16 & 0xFF) +
+                       ((quad[1] >> 16) & 0xFF) +
+                       ((quad[2] >> 16) & 0xFF) + 
+                       ((quad[3] >> 16) & 0xFF)) / 4;
+
+        u8 avg_green = ((quad[0] >> 8 & 0xFF) +
+                       ((quad[1] >> 8) & 0xFF) +
+                       ((quad[2] >> 8) & 0xFF) + 
+                       ((quad[3] >> 8) & 0xFF)) / 4;
+
+        u8 avg_red =   ((quad[0] & 0xFF) +
+                       (quad[1] & 0xFF) +
+                       (quad[2] & 0xFF) + 
+                       (quad[3] & 0xFF)) / 4;
+
+        pix[j] = (avg_alpha << 24) + (avg_blue << 16) + (avg_green << 8) + avg_red;
+
+        if (i % sp->width == 0) i += sp->width;
     }
 
     return pix;
@@ -150,17 +178,17 @@ static void tile_draw(tile_t t) {
     u32 x = t.pos.x * t.obj.size.x + grid.obj.pos.x;
     u32 y = t.pos.y * t.obj.size.y + grid.obj.pos.y;
     if (t.marked) {
-        u32 *pixels = clone_pixels(t.obj.sprite->pixels, t.obj.sprite->width * t.obj.sprite->height);
+        u32 *pixels = shrink_sprite(t.obj.sprite, 2);
 
-        for (int i = 0; i < t.obj.sprite->width * t.obj.sprite->height; i++) {
+        for (int i = 0; i < (t.obj.sprite->width / 2) * (t.obj.sprite->height / 2); i++) {
             pixels[i] = lighten(pixels[i]);
         }
 
-        pix_buf_render(x, y, t.obj.sprite->width, t.obj.sprite->height, pixels, state.texture);
+        pix_buf_render(x + 16, y + 16, t.obj.sprite->width / 2, t.obj.sprite->height / 2, pixels, state.texture);
     }
     else if (t.greyed) {
         u32 *pixels = clone_pixels(t.obj.sprite->pixels, t.obj.sprite->width * t.obj.sprite->height);
-        //
+
         for (int i = 0; i < t.obj.sprite->width * t.obj.sprite->height; i++) {
             pixels[i] = greyscale(pixels[i]);
         }
