@@ -4,14 +4,14 @@
 
 #include <SDL2/SDL.h>
 #include <SDL2/SDL_image.h>
+#include <SDL2/SDL_mixer.h>
 #include <time.h>
 
-#include "../include/types.h"
-#include "../include/lpool.h"
-#include "../include/trie.h"
 #include "../include/macros.h"
+#include "../include/types.h"
+#include "../include/trie.h"
+#include "../include/lpool.h"
 #include "../include/render.h"
-#include "../include/tile.h"
 
 struct {
     SDL_Window *window;
@@ -23,10 +23,24 @@ struct {
 
     vec2i mouse_pos;
     u32 pixels[SCREEN_WIDTH * SCREEN_HEIGHT];
-    bool quit, halt, paused, gameover, clearing, playing, scanning;
+    enum {
+        QUIT,
+        HALT,
+        PAUSED,
+        GAMEOVER,
+        CLEARING,
+        PLAYING,
+        SCANNING,
+    } status;
+
     double time;
     double tick;
 } state;
+
+struct {
+    Mix_Chunk* set;
+    Mix_Chunk* move;
+} sounds;
 
 struct grid {
     uint height, width;
@@ -287,13 +301,7 @@ static void player_draw() {
 static void player_set() {
     grid.tiles[(player.t1.pos.y * grid.width) + player.t1.pos.x] = player.t1;
     grid.tiles[(player.t2.pos.y * grid.width) + player.t2.pos.x] = player.t2;
-    IFDEBUG_LOG( "Set tiles at (%d, %d) and (%d, %d) : (%c %c)",
-        player.t1.pos.x,
-        player.t1.pos.y,
-        player.t2.pos.x,
-        player.t2.pos.y,
-        player.t1.letter,
-        player.t2.letter);
+    Mix_PlayChannel(-1, sounds.set, 0);
 }
 
 static void player_set_greyed() {
@@ -301,13 +309,6 @@ static void player_set_greyed() {
     player.t2.greyed = true;
     grid.tiles[(player.t1.pos.y * grid.width) + player.t1.pos.x] = player.t1;
     grid.tiles[(player.t2.pos.y * grid.width) + player.t2.pos.x] = player.t2;
-    IFDEBUG_LOG( "Set tiles at (%d, %d) and (%d, %d) : (%c %c)",
-        player.t1.pos.x,
-        player.t1.pos.y,
-        player.t2.pos.x,
-        player.t2.pos.y,
-        player.t1.letter,
-        player.t2.letter);
 }
 
 static void render() {
@@ -520,7 +521,8 @@ static bool spawn_player() {
     LOG("Spawned player");
     if (grid.tiles[at(player.t1.pos.y, player.t1.pos.x, grid.width)].filled ||
         grid.tiles[at(player.t2.pos.y, player.t2.pos.x, grid.width)].filled) {
-        state.quit = true;
+        state.status = QUIT;
+        // state.quit = true;
         return false;
     }
 
@@ -606,9 +608,7 @@ void stop_player() {
     player_clear();
     LOG("Cleared player");
 
-    state.playing = false;
-    state.halt = true;
-    state.scanning = true;
+    state.status = SCANNING;
 
     player.active = false;
 }
@@ -628,30 +628,31 @@ static void update() {
     update_tile_connections();
 
     // Scan for words only if not already scanned
-    if (state.scanning && !state.playing) {
+    if (state.status == SCANNING) {
         if (grid_scan_for_words()) {
-            state.scanning = false;
-            state.clearing = true;
+            state.status = CLEARING;
             return;
         }
-    } else if (state.clearing && !state.playing){
+    } else if (state.status == CLEARING){
         // Clear the board of marked files
         grid_clear_marked();
         update_tile_connections();
-        state.clearing = false;
-        state.halt = true;
+
+        state.status = HALT;
+
         return;
     }
 
-    if (state.halt && !state.playing) {
-        state.halt = update_world_physics();
-        if (!state.halt) {
+    if (state.status != PLAYING) {
+        // Drop falling tiles every tick until they can't fall anymore
+        state.status = update_world_physics() ? HALT : PLAYING;
+        if (state.status != HALT) {
             if (grid_scan_for_words()) {
-                state.scanning = false;
-                state.clearing = true;
+                state.status = CLEARING;
+
                 return;
             }
-            state.playing = true;
+
             spawn_player();
             queue_enqueue();
         }
@@ -662,12 +663,22 @@ static void update() {
 
 static void tick() {
     // varying tick speeds --> larger = slower
-    if (state.halt && !state.clearing)
-        state.tick = 250;
-    else if (state.clearing)
-        state.tick = 300;
-    else
-        state.tick = 1500;
+    switch (state.status) {
+        case (HALT):
+            state.tick = 250;
+            break;
+        case (CLEARING):
+            state.tick = 250;
+            break;
+        case (SCANNING):
+            state.tick = 100;
+            break;
+        case (PLAYING):
+            state.tick = 1500;
+            break;
+        default:
+            state.tick = 10;
+    }
 
     if (SDL_GetTicks() >= state.time + state.tick) {
         state.time = SDL_GetTicks();
@@ -861,7 +872,8 @@ static void handle_input() {
     while (SDL_PollEvent(&ev)) {
         switch (ev.type) {
             case SDL_QUIT:
-                state.quit = true;
+                // state.quit = true;
+                state.status = QUIT;
                 break;
             case SDL_MOUSEBUTTONDOWN: {
                 int tile_index = pix_pos_to_grid_index(state.mouse_pos);
@@ -877,7 +889,8 @@ static void handle_input() {
                 /* Check the SDLKey values and move change the coords */
                 switch ( ev.key.keysym.sym ) {
                     case SDLK_ESCAPE: {
-                        state.quit = true;
+                        // state.quit = true;
+                        state.status = QUIT;
                     }
                     case SDLK_a:
                     case SDLK_LEFT: {
@@ -895,7 +908,7 @@ static void handle_input() {
                     }
                     case SDLK_s:
                     case SDLK_DOWN: {
-                        if (!state.halt && !state.clearing) {
+                        if (state.status == PLAYING) {
                             vec2i move = (vec2i){0, 1};
                             if (player_check_movement(move)) {
                                 state.time = SDL_GetTicks();
@@ -916,11 +929,6 @@ static void handle_input() {
                     case SDLK_w:
                     case SDLK_UP:
                         player_flip();
-                        break;
-                    case SDLK_SPACE:
-                        player_set_greyed();
-                        stop_player();
-                        // grid_clear_marked();
                         break;
                     default:
                         break;
@@ -944,12 +952,17 @@ static void sdl_init() {
     state.texture = SDL_CreateTexture(state.renderer, SDL_PIXELFORMAT_ABGR8888, SDL_TEXTUREACCESS_STREAMING, SCREEN_WIDTH, SCREEN_HEIGHT);
 
     ASSERT(state.renderer, "Failed to create SDL Texture: %s\n", SDL_GetError());
+
+    ASSERT(Mix_OpenAudio(44100, MIX_DEFAULT_FORMAT, 2, 1024) >= 0, "Couldn't initialize sound");
+    // Amount of channels (Max amount of sounds playing at the same time)
+    Mix_AllocateChannels(8);
 }
 
 static void game_init() {
     srand(time(NULL));
     load_sprites();
 
+    state.status = PLAYING;
     state.dict_trie = trie_node_create();
     trie_construct(state.dict_trie, "./dictionary.txt");
 
@@ -969,7 +982,9 @@ int main(int argc, char *argv[]) {
     sdl_init();
     game_init();
 
-    while (!state.quit) {
+    sounds.set = Mix_LoadWAV("sfx/set.wav");
+
+    while (state.status != QUIT) {
         tick();
 
         handle_input();

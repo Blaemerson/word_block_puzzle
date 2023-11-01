@@ -156,9 +156,6 @@ const bool check_substrings(
                     }
 
                     break;
-                    // IFDEBUG_LOG("WORD FOUND: %s", substr);
-
-                    // return true;
                 }
             }
         }
